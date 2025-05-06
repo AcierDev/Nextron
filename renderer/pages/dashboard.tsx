@@ -532,6 +532,13 @@ export default function Dashboard() {
           let stateValue: number | boolean | string | undefined = undefined;
           let updateId: string | null = null;
 
+          // Handle pong messages (responses to ping)
+          if (message.action === "pong") {
+            // Just log the pong if needed, but don't treat as unhandled
+            console.debug("Received pong response:", message);
+            return;
+          }
+
           if (message.id !== undefined) {
             updateId = message.id;
 
@@ -798,7 +805,13 @@ export default function Dashboard() {
               if (ws.current && ws.current.readyState === WebSocket.OPEN) {
                 console.log("Sending ping to keep connection alive");
                 try {
-                  ws.current.send(JSON.stringify({ action: "ping" }));
+                  ws.current.send(
+                    JSON.stringify({
+                      action: "ping",
+                      componentGroup: "system",
+                      timestamp: Date.now(),
+                    })
+                  );
                 } catch (error) {
                   console.error("Failed to send ping:", error);
                   clearInterval(pingInterval);
@@ -812,9 +825,18 @@ export default function Dashboard() {
             // Make an additional check that ws.current is still valid
             if (ws.current) {
               try {
-                const intervalId = pingInterval;
-                // Use proper type assertion with null check
-                (ws.current as EnhancedWebSocket).pingIntervalId = intervalId;
+                // Clear any existing ping interval first
+                const wsWithPing = ws.current as EnhancedWebSocket;
+                if (wsWithPing.pingIntervalId) {
+                  console.log(
+                    "Clearing previous ping interval before setting new one"
+                  );
+                  clearInterval(wsWithPing.pingIntervalId);
+                }
+
+                // Set the new interval ID
+                wsWithPing.pingIntervalId = pingInterval;
+                console.log(`Ping interval set, ID: ${pingInterval}`);
               } catch (error) {
                 console.error("Failed to store ping interval ID:", error);
                 clearInterval(pingInterval);
@@ -844,12 +866,17 @@ export default function Dashboard() {
             try {
               const wsWithPing = ws.current as EnhancedWebSocket;
               if (wsWithPing.pingIntervalId) {
+                console.log(
+                  `Clearing ping interval on error, ID: ${wsWithPing.pingIntervalId}`
+                );
                 clearInterval(wsWithPing.pingIntervalId);
                 wsWithPing.pingIntervalId = undefined; // Clear the reference
               }
             } catch (error) {
               console.error("Error clearing ping interval on error:", error);
             }
+            // Clear the WebSocket reference on error
+            console.log("Setting ws.current to null on error");
             ws.current = null;
           }
           setIsFetchingIp(false);
@@ -871,6 +898,9 @@ export default function Dashboard() {
             try {
               const wsWithPing = ws.current as EnhancedWebSocket;
               if (wsWithPing.pingIntervalId) {
+                console.log(
+                  `Clearing ping interval on close, ID: ${wsWithPing.pingIntervalId}`
+                );
                 clearInterval(wsWithPing.pingIntervalId);
                 wsWithPing.pingIntervalId = undefined; // Clear the reference
               }
@@ -879,6 +909,7 @@ export default function Dashboard() {
             }
           }
           // Ensure ws.current is nullified on close regardless of previous state
+          console.log("Setting ws.current to null on close");
           ws.current = null;
           setIsFetchingIp(false); // Also reset fetching IP flag
         };
@@ -1244,7 +1275,13 @@ export default function Dashboard() {
   useEffect(() => {
     // Store the current ws ref to use in the cleanup function
     const wsInstance = ws.current;
+    console.log(
+      "Component mounted, current WebSocket instance:",
+      wsInstance ? "exists" : "null"
+    );
+
     return () => {
+      console.log("Component unmounting, performing WebSocket cleanup");
       try {
         // Use the stored instance in cleanup
         if (wsInstance) {
@@ -1254,9 +1291,11 @@ export default function Dashboard() {
           try {
             const wsWithPing = wsInstance as EnhancedWebSocket;
             if (wsWithPing.pingIntervalId) {
+              console.log(
+                `Clearing ping interval on unmount, ID: ${wsWithPing.pingIntervalId}`
+              );
               clearInterval(wsWithPing.pingIntervalId);
-              // No need to set wsWithPing.pingIntervalId = undefined here
-              // as the instance itself is being discarded.
+              wsWithPing.pingIntervalId = undefined; // Clear the reference
             }
           } catch (err) {
             console.error("Error clearing ping interval:", err);
@@ -1286,6 +1325,7 @@ export default function Dashboard() {
 
           // Set the ref to null only if it hasn't been replaced by a newer instance
           if (ws.current === wsInstance) {
+            console.log("Clearing ws.current reference on unmount");
             ws.current = null;
           }
         }
@@ -1305,7 +1345,7 @@ export default function Dashboard() {
         console.error("Error during WebSocket unmount cleanup:", error);
       }
     };
-  }, []); // <-- CHANGE DEPENDENCY ARRAY TO EMPTY
+  }, []); // <-- Empty dependency array to ensure this runs only on mount/unmount
 
   // Add reconnection attempt functionality
   useEffect(() => {

@@ -31,11 +31,6 @@ struct IoPinConfig {
   Bounce *debouncer;  // Only used for digital inputs
 };
 
-std::vector<IoPinConfig> configuredPins;
-std::map<String, unsigned long> lastPinReadTime;
-const unsigned long analogInputReadInterval =
-    100;  // Only poll analog inputs at this interval
-
 // --- Servo Configuration (uses pointers safely) ---
 struct ServoConfig {
   String id;
@@ -47,25 +42,36 @@ struct ServoConfig {
   bool isAttached = false;
 };
 
-std::vector<ServoConfig> configuredServos;
-
 // --- Stepper Configuration ---
 struct StepperConfig {
   String id;
   String name;
   uint8_t pulPin;
   uint8_t dirPin;
+  uint8_t enaPin = 0;  // Optional enable pin, 0 if not used
   FastAccelStepper *stepper = nullptr;
   long currentPosition = 0;
   long targetPosition = 0;
-  float maxSpeed = 1000.0;
-  float acceleration = 500.0;
+  float maxSpeed = 5000.0;      // Default higher max speed
+  float acceleration = 2000.0;  // Default higher acceleration
+  long minPosition = -50000;    // Min position limit
+  long maxPosition = 50000;     // Max position limit
+  float stepsPerInch = 200.0;   // For unit conversion
   unsigned long lastPositionReportTime = 0;
 };
 
+std::vector<IoPinConfig> configuredPins;
+std::vector<ServoConfig> configuredServos;
 std::vector<StepperConfig> configuredSteppers;
+std::map<String, unsigned long> lastPinReadTime;
+const unsigned long analogInputReadInterval =
+    100;  // Only poll analog inputs at this interval
 const unsigned long stepperPositionReportInterval =
     100;  // Report position every 100ms if changed
+
+// Forward declarations
+void sendStepperNotFoundError(AsyncWebSocketClient *client, const String &id);
+long clampPosition(StepperConfig *stepper, long position);
 
 // IP printing
 unsigned long ipPrintStopTime = 0;
@@ -91,9 +97,9 @@ ServoConfig *findServoById(const String &id) {
 }
 
 StepperConfig *findStepperById(const String &id) {
-  for (auto &stepperConfig : configuredSteppers) {
-    if (stepperConfig.id == id) {
-      return &stepperConfig;
+  for (auto &stepper : configuredSteppers) {
+    if (stepper.id == id) {
+      return &stepper;
     }
   }
   return nullptr;
@@ -144,6 +150,19 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         }
 
         Serial.printf("Processing action: %s for group: %s\n", action, group);
+
+        // Handle ping action for keep-alive
+        if (strcmp(action, "ping") == 0) {
+          StaticJsonDocument<128> response;
+          response["status"] = "OK";
+          response["action"] = "pong";
+          response["componentGroup"] = group;
+
+          String jsonResponse;
+          serializeJson(response, jsonResponse);
+          client->text(jsonResponse);
+          return;
+        }
 
         if (strcmp(group, "pins") == 0) {
           if (strcmp(action, "configure") == 0) {
@@ -409,7 +428,14 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             int maxAngle = config["maxAngle"] | 180;
 
             if (id.isEmpty() || name.isEmpty()) {
-              client->text("ERROR: Missing required config fields for servo");
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Missing required config fields for servo";
+              response["componentGroup"] = "servos";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
               return;
             }
 
@@ -440,7 +466,20 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
               newConfig.isAttached = true;
               configuredServos.push_back(newConfig);
             }
-            client->text("OK: Servo configured");
+
+            // Send successful configuration response
+            StaticJsonDocument<256> response;
+            response["status"] = "OK";
+            response["message"] = "Servo configured";
+            response["id"] = id;
+            response["pin"] = pin;
+            response["minAngle"] = minAngle;
+            response["maxAngle"] = maxAngle;
+            response["componentGroup"] = "servos";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
 
           } else if (strcmp(action, "control") == 0) {
             String id = doc["id"];
@@ -458,17 +497,45 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 servo->isAttached = true;
               }
               servo->servo->write(angle);
-              client->text("OK: Servo angle set");
+
+              // Send back confirmation with the correct componentGroup
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["id"] = servo->id;
+              response["angle"] = angle;
+              response["componentGroup"] = "servos";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
             } else if (doc.containsKey("command")) {
               String cmd = doc["command"];
               if (cmd == "attach" && !servo->isAttached) {
                 servo->servo->attach(servo->pin);
                 servo->isAttached = true;
-                client->text("OK: Servo attached");
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["message"] = "Servo attached";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
               } else if (cmd == "detach" && servo->isAttached) {
                 servo->servo->detach();
                 servo->isAttached = false;
-                client->text("OK: Servo detached");
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["message"] = "Servo detached";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
               } else if (cmd == "reset") {
                 int angle = constrain(90, servo->minAngle, servo->maxAngle);
                 if (!servo->isAttached) {
@@ -476,9 +543,44 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                   servo->isAttached = true;
                 }
                 servo->servo->write(angle);
-                client->text("OK: Servo reset");
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["angle"] = angle;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else if (cmd == "setAngle") {
+                // New command to set angle
+                int angle = doc["value"];
+                angle = constrain(angle, servo->minAngle, servo->maxAngle);
+                if (!servo->isAttached) {
+                  servo->servo->attach(servo->pin);
+                  servo->isAttached = true;
+                }
+                servo->servo->write(angle);
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["angle"] = angle;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
               } else {
-                client->text("ERROR: Unknown command");
+                StaticJsonDocument<128> response;
+                response["status"] = "ERROR";
+                response["message"] = "Unknown command";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
               }
             }
 
@@ -490,10 +592,28 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 if (it->isAttached) it->servo->detach();
                 delete it->servo;
                 configuredServos.erase(it);
-                client->text("OK: Servo removed");
-                break;
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Servo removed";
+                response["id"] = id;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+                return;
               }
             }
+
+            StaticJsonDocument<128> response;
+            response["status"] = "ERROR";
+            response["message"] = "Servo not found";
+            response["componentGroup"] = "servos";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
           }
         }
 
@@ -504,6 +624,7 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             String name = config["name"];
             uint8_t pulPin = config["pulPin"];
             uint8_t dirPin = config["dirPin"];
+            uint8_t enaPin = config["enaPin"] | 0;  // Optional enable pin
 
             if (id.isEmpty() || name.isEmpty() || pulPin == 0 || dirPin == 0) {
               client->text(
@@ -512,30 +633,51 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
               return;
             }
 
+            long minPosition = config["minPosition"] | -50000;
+            long maxPosition = config["maxPosition"] | 50000;
+            float stepsPerInch = config["stepsPerInch"] | 200.0;
+
             StepperConfig *existingStepper = findStepperById(id);
             if (existingStepper) {
               Serial.printf("Updating stepper ID %s (%s)\n", id.c_str(),
                             name.c_str());
               existingStepper->name = name;
+              existingStepper->minPosition = minPosition;
+              existingStepper->maxPosition = maxPosition;
+              existingStepper->stepsPerInch = stepsPerInch;
+              // Pin configuration can't be updated once stepper is created
             } else {
-              Serial.printf("Adding stepper ID %s (%s) on PUL %d, DIR %d\n",
-                            id.c_str(), name.c_str(), pulPin, dirPin);
+              Serial.printf(
+                  "Adding stepper ID %s (%s) on PUL %d, DIR %d, ENA %d\n",
+                  id.c_str(), name.c_str(), pulPin, dirPin, enaPin);
               StepperConfig newConfig;
               newConfig.id = id;
               newConfig.name = name;
               newConfig.pulPin = pulPin;
               newConfig.dirPin = dirPin;
+              newConfig.enaPin = enaPin;
+              newConfig.minPosition = minPosition;
+              newConfig.maxPosition = maxPosition;
+              newConfig.stepsPerInch = stepsPerInch;
 
               // Create FastAccelStepper instance
               newConfig.stepper = engine.stepperConnectToPin(pulPin);
               if (newConfig.stepper) {
                 newConfig.stepper->setDirectionPin(dirPin);
+
+                // Add enable pin if specified
+                if (enaPin > 0) {
+                  newConfig.stepper->setEnablePin(enaPin);
+                  newConfig.stepper->setAutoEnable(true);
+                } else {
+                  // With no enable pin, make sure auto-enable is off
+                  newConfig.stepper->setAutoEnable(false);
+                }
+
                 // Set initial parameters
                 newConfig.stepper->setSpeedInHz(
                     newConfig.maxSpeed);  // Hz instead of steps/second
                 newConfig.stepper->setAcceleration(newConfig.acceleration);
-                // Enable higher speeds by setting auto-enable to false
-                newConfig.stepper->setAutoEnable(false);
 
                 configuredSteppers.push_back(newConfig);
               } else {
@@ -543,13 +685,26 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 return;
               }
             }
-            client->text("OK: Stepper configured");
+
+            // Send back proper JSON response
+            StaticJsonDocument<256> response;
+            response["status"] = "OK";
+            response["message"] = "Stepper configured";
+            response["id"] = id;
+            response["minPosition"] = minPosition;
+            response["maxPosition"] = maxPosition;
+            response["stepsPerInch"] = stepsPerInch;
+            response["componentGroup"] = "steppers";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
 
           } else if (strcmp(action, "control") == 0) {
             String id = doc["id"];
             StepperConfig *stepper = findStepperById(id);
             if (!stepper || !stepper->stepper) {
-              client->text("ERROR: Stepper not found or not initialized");
+              sendStepperNotFoundError(client, id);
               return;
             }
 
@@ -559,7 +714,8 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
               return;
             }
 
-            if (strcmp(command, "setConfig") == 0) {
+            // Process setParams command (replaces setConfig)
+            if (strcmp(command, "setParams") == 0) {
               if (doc.containsKey("speed")) {
                 float speed = doc["speed"].as<float>();
                 // Store the requested speed value
@@ -575,52 +731,170 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 Serial.printf("Stepper %s: Set speed to %.2f Hz\n", id.c_str(),
                               speed);
               }
-              if (doc.containsKey("accel")) {
-                float accel = doc["accel"].as<float>();
+              if (doc.containsKey("acceleration")) {
+                float accel = doc["acceleration"].as<float>();
                 stepper->stepper->setAcceleration(accel);
                 stepper->acceleration = accel;
 
                 Serial.printf("Stepper %s: Set acceleration to %.2f steps/s²\n",
                               id.c_str(), accel);
               }
-              Serial.printf(
-                  "Stepper %s: Config updated (speed=%.2f Hz, accel=%.2f "
-                  "steps/s²)\n",
-                  id.c_str(), stepper->maxSpeed, stepper->acceleration);
-              client->text("OK: Stepper config updated");
-            } else if (strcmp(command, "move") == 0) {
-              if (doc.containsKey("steps")) {
-                long steps = doc["steps"].as<long>();
-                // Get current position first
-                long currentPos = stepper->stepper->getCurrentPosition();
-                // Move relative from current position
-                stepper->stepper->move(steps);
-                stepper->targetPosition = currentPos + steps;
-
-                Serial.printf(
-                    "Stepper %s: Moving relative %ld steps (speed=%.2f, "
-                    "accel=%.2f)\n",
-                    id.c_str(), steps, stepper->maxSpeed,
-                    stepper->acceleration);
-                client->text("OK: Stepper move initiated");
+              if (doc.containsKey("minPosition")) {
+                stepper->minPosition = doc["minPosition"].as<long>();
+                Serial.printf("Stepper %s: Set min position to %ld\n",
+                              id.c_str(), stepper->minPosition);
               }
-            } else if (strcmp(command, "moveTo") == 0) {
-              if (doc.containsKey("position")) {
-                long pos = doc["position"].as<long>();
-                stepper->stepper->moveTo(pos);
-                stepper->targetPosition = pos;
+              if (doc.containsKey("maxPosition")) {
+                stepper->maxPosition = doc["maxPosition"].as<long>();
+                Serial.printf("Stepper %s: Set max position to %ld\n",
+                              id.c_str(), stepper->maxPosition);
+              }
+              if (doc.containsKey("stepsPerInch")) {
+                stepper->stepsPerInch = doc["stepsPerInch"].as<float>();
+                Serial.printf("Stepper %s: Set steps per inch to %.2f\n",
+                              id.c_str(), stepper->stepsPerInch);
+              }
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Stepper parameters updated";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Process move command for absolute positioning
+            else if (strcmp(command, "move") == 0) {
+              if (doc.containsKey("value")) {
+                long targetPos = doc["value"].as<long>();
+
+                // Apply position limits using helper function
+                targetPos = clampPosition(stepper, targetPos);
+
+                // Set the move
+                stepper->stepper->moveTo(targetPos);
+                stepper->targetPosition = targetPos;
 
                 Serial.printf(
                     "Stepper %s: Moving to absolute %ld (speed=%.2f, "
                     "accel=%.2f)\n",
-                    id.c_str(), pos, stepper->maxSpeed, stepper->acceleration);
-                client->text("OK: Stepper moveTo initiated");
+                    id.c_str(), targetPos, stepper->maxSpeed,
+                    stepper->acceleration);
+
+                // Send response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Moving to position";
+                response["id"] = stepper->id;
+                response["position"] = targetPos;
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
               }
-            } else if (strcmp(command, "stop") == 0) {
+            }
+            // Process step command for relative positioning
+            else if (strcmp(command, "step") == 0) {
+              if (doc.containsKey("value")) {
+                long steps = doc["value"].as<long>();
+
+                // Get current position first
+                long currentPos = stepper->stepper->getCurrentPosition();
+                long newPos = currentPos + steps;
+
+                // Apply position limits using helper function
+                newPos = clampPosition(stepper, newPos);
+
+                // Recalculate steps based on limits
+                steps = newPos - currentPos;
+
+                // Move if steps is not zero (avoid unnecessary commands)
+                if (steps != 0) {
+                  stepper->stepper->move(steps);
+                  stepper->targetPosition = newPos;
+
+                  Serial.printf(
+                      "Stepper %s: Stepping %ld steps to %ld (speed=%.2f, "
+                      "accel=%.2f)\n",
+                      id.c_str(), steps, newPos, stepper->maxSpeed,
+                      stepper->acceleration);
+                }
+
+                // Send response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Step command processed";
+                response["id"] = stepper->id;
+                response["steps"] = steps;
+                response["position"] =
+                    newPos;  // Add the target position to the response
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              }
+            }
+            // Process home command to return to center position
+            else if (strcmp(command, "home") == 0) {
+              // Calculate "home" position as middle of range
+              long homePos = (stepper->minPosition + stepper->maxPosition) / 2;
+
+              // Move to home position
+              stepper->stepper->moveTo(homePos);
+              stepper->targetPosition = homePos;
+
+              Serial.printf(
+                  "Stepper %s: Homing to position %ld (speed=%.2f, "
+                  "accel=%.2f)\n",
+                  id.c_str(), homePos, stepper->maxSpeed,
+                  stepper->acceleration);
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Homing stepper";
+              response["id"] = stepper->id;
+              response["position"] = homePos;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Process emergency stop command
+            else if (strcmp(command, "stop") == 0) {
               stepper->stepper->forceStop();
-              client->text("OK: Stepper stopped");
-            } else {
-              client->text("ERROR: Unknown stepper command");
+
+              Serial.printf("Stepper %s: Emergency stop issued\n", id.c_str());
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Stepper stopped";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Handle unknown command
+            else {
+              // Send error response
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Unknown stepper command";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
             }
 
           } else if (strcmp(action, "remove") == 0) {
@@ -634,9 +908,24 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 }
                 // FastAccelStepper is managed by the engine, no need to delete
                 configuredSteppers.erase(it);
-                client->text("OK: Stepper removed");
+
+                // Send JSON response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Stepper removed";
+                response["id"] = id;
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
                 break;
               }
+            }
+
+            // If we got here without sending a response, stepper wasn't found
+            if (client->status() == WS_CONNECTED) {
+              sendStepperNotFoundError(client, id);
             }
           }
         }
@@ -764,17 +1053,84 @@ void loop() {
           stepperConfig.lastPositionReportTime = now;
 
           StaticJsonDocument<128> updateDoc;
-          updateDoc["type"] = "stepperUpdate";
           updateDoc["id"] = stepperConfig.id;
           updateDoc["position"] = currentPos;
+          updateDoc["componentGroup"] = "steppers";
 
           String output;
           serializeJson(updateDoc, output);
           ws.textAll(output);
+
+          Serial.printf(
+              "Stepper %s: Position update sent: %ld steps (%.2f inches)\n",
+              stepperConfig.id.c_str(), currentPos,
+              currentPos / stepperConfig.stepsPerInch);
+        }
+      }
+    }
+  }
+
+  // --- Track Servo Positions ---
+  // Add servo position tracking to the main loop
+  static unsigned long lastServoUpdateTime = 0;
+  static const unsigned long servoUpdateInterval = 2000;  // 2 second interval
+
+  unsigned long currentTime = millis();
+  if (currentTime - lastServoUpdateTime >= servoUpdateInterval) {
+    lastServoUpdateTime = currentTime;
+
+    // Report positions of all active servos only if changed
+    for (auto &servoConfig : configuredServos) {
+      if (servoConfig.isAttached) {
+        // Read current angle
+        int currentAngle = servoConfig.servo->read();
+
+        // Store the last reported angle in the servo config if not already
+        // there
+        static std::map<String, int> lastReportedAngles;
+
+        // Only send update if the angle has changed since last report
+        if (!lastReportedAngles.count(servoConfig.id) ||
+            lastReportedAngles[servoConfig.id] != currentAngle) {
+          // Update the last reported angle
+          lastReportedAngles[servoConfig.id] = currentAngle;
+
+          // Send the update
+          StaticJsonDocument<128> updateDoc;
+          updateDoc["id"] = servoConfig.id;
+          updateDoc["angle"] = currentAngle;
+          updateDoc["componentGroup"] = "servos";
+
+          String output;
+          serializeJson(updateDoc, output);
+          ws.textAll(output);
+
+          Serial.printf("Servo %s: Position update sent: %d degrees\n",
+                        servoConfig.id.c_str(), currentAngle);
         }
       }
     }
   }
 
   delay(1);  // Small delay is okay, FastAccelStepper uses hardware timers
+}
+
+// Send JSON error message for when a stepper is not found
+void sendStepperNotFoundError(AsyncWebSocketClient *client, const String &id) {
+  StaticJsonDocument<128> response;
+  response["status"] = "ERROR";
+  response["message"] = "Stepper not found or not initialized";
+  response["id"] = id;
+  response["componentGroup"] = "steppers";
+
+  String jsonResponse;
+  serializeJson(response, jsonResponse);
+  client->text(jsonResponse);
+}
+
+// Helper to clamp a position within the stepper's limits
+long clampPosition(StepperConfig *stepper, long position) {
+  if (position < stepper->minPosition) return stepper->minPosition;
+  if (position > stepper->maxPosition) return stepper->maxPosition;
+  return position;
 }

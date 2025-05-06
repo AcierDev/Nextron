@@ -82,15 +82,76 @@ export default function StepperCardDesign2({
   const [targetMoveValue, setTargetMoveValue] = useState<string>("0"); // Store input as string
   const [moveToUnit, setMoveToUnit] = useState<"steps" | "inches">("steps"); // State for unit selection
 
-  // Jogging State (UI only)
-  const [jogUnit, setJogUnit] = useState<"steps" | "inches">("steps");
-  const [jogAmount, setJogAmount] = useState(200);
-  const [jogAmountInches, setJogAmountInches] = useState(0.1);
+  // Jogging State - Load from localStorage if available
+  const [jogUnit, setJogUnit] = useState<"steps" | "inches">(() => {
+    try {
+      const saved = localStorage.getItem(`stepper-jogUnit-${id}`);
+      return saved === "inches" ? "inches" : "steps";
+    } catch (error) {
+      return "steps";
+    }
+  });
+
+  const [jogAmount, setJogAmount] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`stepper-jogAmount-${id}`);
+      return saved ? parseInt(saved, 10) : 200;
+    } catch (error) {
+      return 200;
+    }
+  });
+
+  const [jogAmountInches, setJogAmountInches] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`stepper-jogAmountInches-${id}`);
+      return saved ? parseFloat(saved) : 0.1;
+    } catch (error) {
+      return 0.1;
+    }
+  });
 
   // Continuous Movement State
   const [isMovingLeft, setIsMovingLeft] = useState(false);
   const [isMovingRight, setIsMovingRight] = useState(false);
   const moveIntervalRef = useRef<NodeJS.Timeout | null>(null); // Ref to hold interval ID
+
+  // Effect to sync with prop changes
+  useEffect(() => {
+    setSpeed(initialSpeed);
+    setAcceleration(initialAcceleration);
+    setStepsPerInch(initialStepsPerInch);
+    setMinPosition(initialMinPosition);
+    setMaxPosition(initialMaxPosition);
+  }, [
+    initialSpeed,
+    initialAcceleration,
+    initialStepsPerInch,
+    initialMinPosition,
+    initialMaxPosition,
+  ]);
+
+  // Effect to send min/max/stepsPerInch changes back to the server
+  useEffect(() => {
+    // Send configuration updates when these values change
+    const handleConfigUpdate = () => {
+      console.log(
+        `[StepperCard ${id}] Updating configuration: min=${minPosition}, max=${maxPosition}, stepsPerInch=${stepsPerInch}`
+      );
+      sendMessage({
+        action: "control",
+        componentGroup: "steppers",
+        id,
+        command: "setParams",
+        minPosition,
+        maxPosition,
+        stepsPerInch,
+      });
+    };
+
+    // Add a small delay to avoid rapid config changes
+    const timeoutId = setTimeout(handleConfigUpdate, 500);
+    return () => clearTimeout(timeoutId);
+  }, [minPosition, maxPosition, stepsPerInch, id, sendMessage]);
 
   // Effect to handle continuous movement via repeated step commands
   useEffect(() => {
@@ -127,6 +188,23 @@ export default function StepperCardDesign2({
       }
     };
   }, [isMovingLeft, isMovingRight, id, sendMessage]); // Rerun if moving state changes
+
+  // Save jog settings to localStorage when they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(`stepper-jogUnit-${id}`, jogUnit);
+      localStorage.setItem(`stepper-jogAmount-${id}`, jogAmount.toString());
+      localStorage.setItem(
+        `stepper-jogAmountInches-${id}`,
+        jogAmountInches.toString()
+      );
+    } catch (error) {
+      console.error(
+        `[StepperCard ${id}] Error saving jog settings to localStorage:`,
+        error
+      );
+    }
+  }, [id, jogUnit, jogAmount, jogAmountInches]);
 
   const moveToPosition = (pos: number) => {
     let limitedPos = Math.round(pos); // Ensure integer steps
@@ -218,13 +296,18 @@ export default function StepperCardDesign2({
       return;
     }
 
+    let targetPos = 0;
     if (moveToUnit === "steps") {
-      moveToPosition(numericValue);
+      targetPos = numericValue;
     } else {
       // Unit is inches
-      const steps = numericValue * stepsPerInch;
-      moveToPosition(steps);
+      targetPos = Math.round(numericValue * stepsPerInch);
     }
+
+    console.log(
+      `[StepperCard ${id}] Moving to ${targetPos} steps (${numericValue} ${moveToUnit})`
+    );
+    moveToPosition(targetPos);
   };
 
   return (
@@ -296,11 +379,21 @@ export default function StepperCardDesign2({
         </div>
 
         <div className="flex justify-between text-sm text-gray-500 dark:text-gray-400">
-          <span>{(minPosition / stepsPerInch).toFixed(2)}"</span>
+          <span>{(minPosition / stepsPerInch).toFixed(3)}"</span>
           <span className="font-medium text-primary">
-            {position} steps ({(position / stepsPerInch).toFixed(2)}")
+            {position.toLocaleString()} steps (
+            {(position / stepsPerInch).toFixed(3)}")
           </span>
-          <span>{(maxPosition / stepsPerInch).toFixed(2)}"</span>
+          <span>{(maxPosition / stepsPerInch).toFixed(3)}"</span>
+        </div>
+
+        <div className="flex space-x-2 items-center text-xs text-gray-500">
+          <span>Range:</span>
+          <span>{(maxPosition - minPosition).toLocaleString()} steps</span>
+          <span>|</span>
+          <span>
+            {((maxPosition - minPosition) / stepsPerInch).toFixed(3)}"
+          </span>
         </div>
 
         {/* Hold Buttons */}
@@ -420,7 +513,7 @@ export default function StepperCardDesign2({
                 id={`${id}-speed`}
                 value={[speed]}
                 min={100}
-                max={10000}
+                max={20000}
                 step={100}
                 onValueChange={(value) => setSpeed(value[0])} // Update local state for slider smoothness
                 onValueCommit={(value) => handleSpeedChange(value[0])} // Send command on release
@@ -436,7 +529,7 @@ export default function StepperCardDesign2({
                 id={`${id}-accel`}
                 value={[acceleration]}
                 min={100}
-                max={5000}
+                max={10000}
                 step={100}
                 onValueChange={(value) => setAcceleration(value[0])} // Update local state
                 onValueCommit={(value) => handleAccelChange(value[0])} // Send command on release
@@ -448,40 +541,86 @@ export default function StepperCardDesign2({
           <TabsContent value="settings" className="space-y-3">
             <div>
               <Label htmlFor={`${id}-steps-per-inch`}>Steps per Inch</Label>
-              <Input
-                id={`${id}-steps-per-inch`}
-                type="number"
-                value={stepsPerInch}
-                onChange={(e) => setStepsPerInch(Number(e.target.value))}
-                className="mt-1"
-              />
+              <div className="flex space-x-2">
+                <Input
+                  id={`${id}-steps-per-inch`}
+                  type="number"
+                  value={stepsPerInch}
+                  onChange={(e) => setStepsPerInch(Number(e.target.value))}
+                  className="mt-1 flex-1"
+                />
+                <Button
+                  onClick={() => {
+                    console.log(
+                      `[StepperCard ${id}] Updating steps per inch: ${stepsPerInch}`
+                    );
+                    sendMessage({
+                      action: "control",
+                      componentGroup: "steppers",
+                      id,
+                      command: "setParams",
+                      stepsPerInch: stepsPerInch,
+                    });
+                  }}
+                  size="sm"
+                  className="mt-1"
+                >
+                  Save
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label htmlFor={`${id}-min-pos`}>
                   Minimum Position (Steps)
                 </Label>
-                <Input
-                  id={`${id}-min-pos`}
-                  type="number"
-                  value={minPosition}
-                  onChange={(e) => setMinPosition(Number(e.target.value))}
-                  className="mt-1"
-                />
+                <div className="flex space-x-2">
+                  <Input
+                    id={`${id}-min-pos`}
+                    type="number"
+                    value={minPosition}
+                    onChange={(e) => setMinPosition(Number(e.target.value))}
+                    className="mt-1 flex-1"
+                  />
+                </div>
               </div>
               <div>
                 <Label htmlFor={`${id}-max-pos`}>
                   Maximum Position (Steps)
                 </Label>
-                <Input
-                  id={`${id}-max-pos`}
-                  type="number"
-                  value={maxPosition}
-                  onChange={(e) => setMaxPosition(Number(e.target.value))}
-                  className="mt-1"
-                />
+                <div className="flex space-x-2">
+                  <Input
+                    id={`${id}-max-pos`}
+                    type="number"
+                    value={maxPosition}
+                    onChange={(e) => setMaxPosition(Number(e.target.value))}
+                    className="mt-1 flex-1"
+                  />
+                </div>
               </div>
             </div>
+            <Button
+              onClick={() => {
+                console.log(
+                  `[StepperCard ${id}] Updating min/max position: ${minPosition}/${maxPosition}`
+                );
+                sendMessage({
+                  action: "control",
+                  componentGroup: "steppers",
+                  id,
+                  command: "setParams",
+                  minPosition: minPosition,
+                  maxPosition: maxPosition,
+                  stepsPerInch: stepsPerInch,
+                  speed: speed,
+                  acceleration: acceleration,
+                });
+              }}
+              variant="outline"
+              className="w-full"
+            >
+              Save All Settings
+            </Button>
             <div className="border rounded-md p-3 space-y-3">
               <Label className="font-medium">Jog Button Settings</Label>
               <div>

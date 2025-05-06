@@ -68,7 +68,21 @@ export default function ServoCardHybrid({
   const [minAngle, setMinAngle] = useState(initialMinAngle);
   const [maxAngle, setMaxAngle] = useState(initialMaxAngle);
   const [targetAngle, setTargetAngle] = useState(90); // UI state for the input field
-  const [presets, setPresets] = useState([0, 45, 90, 135, 180]); // Local UI state
+
+  // Load presets from localStorage if available, else use defaults
+  const [presets, setPresets] = useState<number[]>(() => {
+    // Try to load saved presets for this specific servo
+    try {
+      const savedPresets = localStorage.getItem(`servo-presets-${id}`);
+      if (savedPresets) {
+        return JSON.parse(savedPresets);
+      }
+    } catch (error) {
+      console.error("Error loading saved presets:", error);
+    }
+    // Default presets if none saved
+    return [0, 45, 90, 135, 180];
+  });
   const [newPreset, setNewPreset] = useState(0);
   const [editingPreset, setEditingPreset] = useState<{
     index: number;
@@ -95,13 +109,15 @@ export default function ServoCardHybrid({
     ctx.clearRect(0, 0, width, height);
 
     // Draw servo body
-    ctx.fillStyle = "#e5e7eb";
+    ctx.fillStyle = "#e5e7eb"; // Tailwind gray-200
     ctx.fillRect(centerX - 20, centerY - 10, 40, 20);
 
-    // Draw angle arc
+    // Draw angle arc based on minAngle and maxAngle
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, Math.PI, 0, false);
-    ctx.strokeStyle = "#d1d5db";
+    const startAngleRad = ((180 + minAngle) * Math.PI) / 180;
+    const endAngleRad = ((180 + maxAngle) * Math.PI) / 180;
+    ctx.arc(centerX, centerY, radius, startAngleRad, endAngleRad, false); // false for clockwise
+    ctx.strokeStyle = "#d1d5db"; // Tailwind gray-300
     ctx.lineWidth = 2;
     ctx.stroke();
 
@@ -114,7 +130,7 @@ export default function ServoCardHybrid({
     ctx.moveTo(centerX, centerY);
     ctx.lineTo(
       centerX + radius * Math.cos(minAngleRad),
-      centerY + radius * Math.sin(minAngleRad)
+      centerY - radius * Math.sin(minAngleRad)
     );
     ctx.strokeStyle = "#9ca3af";
     ctx.lineWidth = 1;
@@ -125,7 +141,7 @@ export default function ServoCardHybrid({
     ctx.moveTo(centerX, centerY);
     ctx.lineTo(
       centerX + radius * Math.cos(maxAngleRad),
-      centerY + radius * Math.sin(maxAngleRad)
+      centerY - radius * Math.sin(maxAngleRad)
     );
     ctx.strokeStyle = "#9ca3af";
     ctx.lineWidth = 1;
@@ -140,7 +156,7 @@ export default function ServoCardHybrid({
         ctx.beginPath();
         ctx.arc(
           centerX + (radius - 5) * Math.cos(presetRad),
-          centerY + (radius - 5) * Math.sin(presetRad),
+          centerY - (radius - 5) * Math.sin(presetRad),
           3,
           0,
           Math.PI * 2
@@ -156,7 +172,7 @@ export default function ServoCardHybrid({
     ctx.moveTo(centerX, centerY);
     ctx.lineTo(
       centerX + radius * Math.cos(angleRad),
-      centerY + radius * Math.sin(angleRad)
+      centerY - radius * Math.sin(angleRad)
     );
     ctx.strokeStyle = "#4f46e5";
     ctx.lineWidth = 3;
@@ -166,7 +182,7 @@ export default function ServoCardHybrid({
     ctx.beginPath();
     ctx.arc(
       centerX + radius * Math.cos(angleRad),
-      centerY + radius * Math.sin(angleRad),
+      centerY - radius * Math.sin(angleRad),
       5,
       0,
       Math.PI * 2
@@ -182,15 +198,20 @@ export default function ServoCardHybrid({
     if (limitedAngle > maxAngle) limitedAngle = maxAngle;
 
     console.log(`[ServoCard ${id}] Sending setAngle: ${limitedAngle}`);
-    sendMessage({
-      action: "control",
-      componentGroup: "servos",
-      id: id,
-      command: "setAngle", // Assuming command name
-      value: limitedAngle,
-    });
-    // Do not update local state directly, wait for update via componentStates prop
-    // setAngle(limitedAngle);
+
+    // Check if the servo is attached and show error if not
+    try {
+      sendMessage({
+        action: "control",
+        componentGroup: "servos",
+        id: id,
+        command: "setAngle", // Using the command name we added to the firmware
+        value: limitedAngle,
+      });
+    } catch (error) {
+      console.error(`[ServoCard ${id}] Error sending angle command:`, error);
+    }
+    // Angle state will be updated from parent via the angle prop when the server responds
   };
 
   const moveToHome = () => {
@@ -231,13 +252,89 @@ export default function ServoCardHybrid({
   const handleMinAngleChange = (value: number) => {
     const newMin = Math.max(0, Math.min(value, maxAngle - 1)); // Ensure min < max and >= 0
     setMinAngle(newMin);
-    // Optional: Trigger save indication or send update
+
+    // Send update to the server
+    sendMessage({
+      action: "configure",
+      componentGroup: "servos",
+      config: {
+        id,
+        name,
+        pin: pins.control,
+        minAngle: newMin,
+        maxAngle,
+      },
+    });
   };
+
   const handleMaxAngleChange = (value: number) => {
     const newMax = Math.min(180, Math.max(value, minAngle + 1)); // Ensure max > min and <= 180
     setMaxAngle(newMax);
-    // Optional: Trigger save indication or send update
+
+    // Send update to the server
+    sendMessage({
+      action: "configure",
+      componentGroup: "servos",
+      config: {
+        id,
+        name,
+        pin: pins.control,
+        minAngle,
+        maxAngle: newMax,
+      },
+    });
   };
+
+  // Add an effect to listen for WebSocket events
+  useEffect(() => {
+    // Define a handler for the WebSocket message event
+    const handleMessage = (event: CustomEvent<any>) => {
+      try {
+        const data = event.detail;
+
+        // Check if this message is for this servo
+        if (data && data.id === id) {
+          console.log(`[ServoCard ${id}] Received message:`, data);
+
+          // Handle any specific updates needed
+          if (data.status === "ERROR" && data.message) {
+            console.error(`[ServoCard ${id}] Error:`, data.message);
+          }
+        }
+      } catch (error) {
+        console.error("[ServoCard] Error processing WebSocket message:", error);
+      }
+    };
+
+    // Add event listener for custom websocket messages
+    window.addEventListener(
+      "websocket-message",
+      handleMessage as EventListener
+    );
+
+    // Cleanup
+    return () => {
+      window.removeEventListener(
+        "websocket-message",
+        handleMessage as EventListener
+      );
+    };
+  }, [id]);
+
+  // Add useEffect to update state when props change
+  useEffect(() => {
+    setMinAngle(initialMinAngle);
+    setMaxAngle(initialMaxAngle);
+  }, [initialMinAngle, initialMaxAngle]);
+
+  // Save presets to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(`servo-presets-${id}`, JSON.stringify(presets));
+    } catch (error) {
+      console.error("Error saving presets:", error);
+    }
+  }, [presets, id]);
 
   return (
     <Card className="shadow-md">

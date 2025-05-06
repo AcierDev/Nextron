@@ -3,10 +3,25 @@
 // Separate script to handle serial port communication
 // avoids bundling issues with Next.js
 
-import { SerialPort } from "serialport";
-import { ReadlineParser } from "@serialport/parser-readline";
+// Use dynamic imports instead of static imports to avoid bundling issues
 import fs from "fs";
 import path from "path";
+
+// Function to safely require and load serialport
+let SerialPort: any;
+let ReadlineParser: any;
+
+try {
+  // Load serialport dynamically
+  const serialport = require("serialport");
+  SerialPort = serialport.SerialPort;
+  const parser = require("@serialport/parser-readline");
+  ReadlineParser = parser.ReadlineParser;
+  console.log("[IP Finder] Successfully loaded SerialPort modules");
+} catch (error) {
+  console.error("[IP Finder] Error loading SerialPort modules:", error);
+  process.exit(1);
+}
 
 // Determine if running in production or development mode
 const isProd = process.env.NODE_ENV === "production";
@@ -42,8 +57,9 @@ if (isProd) {
 
 console.log(`[IP Finder] Using IP file path: ${ipFilePath}`);
 
-let port: SerialPort | null = null;
-let parser: ReadlineParser | null = null;
+// Fix type declarations by using typeof
+let port: typeof SerialPort | null = null;
+let parser: any = null;
 let detectionAttempts = 0;
 const MAX_DETECTION_ATTEMPTS = 5; // Limit retries
 
