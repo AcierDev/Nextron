@@ -33,6 +33,7 @@ export interface HardwareConfig {
 export interface SavedConfigDocument {
   _id: ObjectId; // Handled by MongoDB driver
   name: string;
+  description?: string;
   hardware: HardwareConfig;
   createdAt: Date;
   updatedAt: Date;
@@ -50,6 +51,7 @@ export interface AvailableConfigIPC {
  * Structure for full config data sent via IPC (ObjectId converted to string).
  */
 export interface FullConfigDataIPC extends AvailableConfigIPC {
+  description?: string;
   hardware: HardwareConfig;
   createdAt?: string; // Dates might be serialized as strings
   updatedAt?: string;

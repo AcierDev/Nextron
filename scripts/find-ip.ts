@@ -8,7 +8,35 @@ import { ReadlineParser } from "@serialport/parser-readline";
 import fs from "fs";
 import path from "path";
 
-const IP_FILE_PATH = path.join(__dirname, "..", ".ip_address"); // Store IP in project root
+// Determine if running in production or development mode
+const isProd = process.env.NODE_ENV === "production";
+
+// Calculate the correct IP file path based on environment
+let ipFilePath: string;
+if (isProd) {
+  // In production, we're likely a packaged app, so use a more absolute path
+  // AppData directory is a good location for user data
+  const appDataPath =
+    process.env.APPDATA ||
+    (process.platform === "darwin"
+      ? path.join(process.env.HOME || "", "Library", "Application Support")
+      : path.join(process.env.HOME || "", ".config"));
+
+  const appName = "My Nextron App"; // Should match your app name
+  ipFilePath = path.join(appDataPath, appName, ".ip_address");
+
+  // Ensure directory exists
+  const dirPath = path.dirname(ipFilePath);
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+} else {
+  // In development, use the project root
+  ipFilePath = path.join(__dirname, "..", ".ip_address");
+}
+
+console.log(`[IP Finder] Using IP file path: ${ipFilePath}`);
+
 let port: SerialPort | null = null;
 let parser: ReadlineParser | null = null;
 let detectionAttempts = 0;
@@ -60,10 +88,10 @@ async function findEsp32PortPath(): Promise<string | null> {
 
 // Function to clean up the IP file
 function cleanupIpFile() {
-  if (fs.existsSync(IP_FILE_PATH)) {
+  if (fs.existsSync(ipFilePath)) {
     console.log("[IP Finder] Cleaning up IP file.");
     try {
-      fs.unlinkSync(IP_FILE_PATH);
+      fs.unlinkSync(ipFilePath);
     } catch (err) {
       console.error("[IP Finder] Error deleting IP file:", err);
     }
@@ -85,7 +113,7 @@ async function startIpDetection() {
       setTimeout(startIpDetection, 5000); // Retry after a delay
     } else {
       console.error("[IP Finder] Max detection attempts reached. Exiting.");
-      fs.writeFileSync(IP_FILE_PATH, "ERROR: Port not found"); // Signal error
+      fs.writeFileSync(ipFilePath, "ERROR: Port not found"); // Signal error
     }
     return;
   }
@@ -100,8 +128,8 @@ async function startIpDetection() {
       const ip = line.substring("IP_READY:".length).trim();
       console.log(`[IP Finder] *** Detected ESP32 IP Address: ${ip} ***`);
       try {
-        fs.writeFileSync(IP_FILE_PATH, ip);
-        console.log(`[IP Finder] IP address written to ${IP_FILE_PATH}`);
+        fs.writeFileSync(ipFilePath, ip);
+        console.log(`[IP Finder] IP address written to ${ipFilePath}`);
       } catch (err) {
         console.error("[IP Finder] Error writing IP file:", err);
       }
@@ -133,7 +161,7 @@ async function startIpDetection() {
       console.error(
         "[IP Finder] Max detection attempts reached after error. Exiting."
       );
-      fs.writeFileSync(IP_FILE_PATH, `ERROR: ${err.message}`); // Signal error
+      fs.writeFileSync(ipFilePath, `ERROR: ${err.message}`); // Signal error
     }
   });
 
@@ -141,7 +169,7 @@ async function startIpDetection() {
     console.log("[IP Finder] Serial port closed.");
     // If closed unexpectedly before writing IP, maybe retry?
     if (
-      !fs.existsSync(IP_FILE_PATH) &&
+      !fs.existsSync(ipFilePath) &&
       detectionAttempts < MAX_DETECTION_ATTEMPTS
     ) {
       console.log(

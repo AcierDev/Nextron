@@ -10,4 +10,17 @@ files:
       - package.json
       - app
       - .env
+extraResources:
+  - from: firmware/
+    to: firmware
+  # For development, include the original scripts
+  - from: scripts/
+    to: scripts
+    filter:
+      - "*.ts"
+  # For production, include the compiled scripts
+  - from: dist/scripts/
+    to: scripts
+    filter:
+      - "*.js"
 publish: null

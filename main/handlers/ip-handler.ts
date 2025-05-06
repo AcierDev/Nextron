@@ -1,8 +1,28 @@
 import fs from "fs";
 import path from "path";
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, app } from "electron";
 
-const IP_FILE_PATH = path.resolve(__dirname, "..", ".ip_address"); // Adjust path if needed relative to 'main' dir output
+// Get the IP file path dynamically based on environment
+function getIpFilePath(): string {
+  const isProd = process.env.NODE_ENV === "production";
+
+  if (isProd) {
+    // In production, use the same location as the find-ip.ts script
+    const appDataPath =
+      process.env.APPDATA ||
+      (process.platform === "darwin"
+        ? path.join(process.env.HOME || "", "Library", "Application Support")
+        : path.join(process.env.HOME || "", ".config"));
+
+    const appName = "My Nextron App"; // Should match the name in find-ip.ts
+    return path.join(appDataPath, appName, ".ip_address");
+  } else {
+    // In development, use the project root
+    return path.resolve(__dirname, "..", "..", ".ip_address");
+  }
+}
+
+const IP_FILE_PATH = getIpFilePath();
 let intervalId: NodeJS.Timeout | null = null;
 let watchingWindow: BrowserWindow | null = null;
 

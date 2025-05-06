@@ -1,10 +1,7 @@
 import { ipcMain } from "electron";
 import { getDb } from "../lib/mongodb"; // Corrected path: Use relative path from main process to renderer's lib
 import { Collection, ObjectId } from "mongodb";
-import {
-  HardwareConfig,
-  SavedConfigDocument,
-} from "../../renderer/components/dashboard/types"; // Corrected path: Use relative path from main process to renderer's components
+import { HardwareConfig, SavedConfigDocument } from "../../common/types"; // Correct import path
 
 // Ensure this utility function can be called from the main process context.
 // The path '@/' might resolve differently in main vs. renderer.
