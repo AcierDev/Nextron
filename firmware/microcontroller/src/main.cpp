@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncEventSource.h>
+#include <Bounce2.h>
 #include <ESP32Servo.h>
 #include <FastAccelStepper.h>
 #include <WiFi.h>
@@ -16,17 +17,24 @@ const char *password = "Everwood-Staff";
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 
 // --- Pin Configuration ---
+enum PinPullMode { PULL_NONE = 0, PULL_UP = 1, PULL_DOWN = 2 };
+
 struct IoPinConfig {
   String id;
   String name;
   uint8_t pin;
-  uint8_t mode;
-  int lastState;
+  String pinType;  // "digital", "analog", or "pwm"
+  String mode;     // "input" or "output"
+  int lastValue;   // Last read or written value
+  PinPullMode pullMode;
+  uint16_t debounceMs;
+  Bounce *debouncer;  // Only used for digital inputs
 };
 
 std::vector<IoPinConfig> configuredPins;
 std::map<String, unsigned long> lastPinReadTime;
-const unsigned long inputReadInterval = 50;
+const unsigned long analogInputReadInterval =
+    100;  // Only poll analog inputs at this interval
 
 // --- Servo Configuration (uses pointers safely) ---
 struct ServoConfig {
@@ -117,12 +125,25 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           return;
         }
 
+        // Debug: Print received message to Serial
+        Serial.println("Received JSON message:");
+        serializeJsonPretty(doc, Serial);
+        Serial.println();
+
         const char *action = doc["action"];
         const char *group = doc["componentGroup"];
-        if (!action || !group) {
-          client->text("ERROR: Missing action or componentGroup");
+
+        if (!action) {
+          client->text("ERROR: Missing action field");
           return;
         }
+
+        if (!group) {
+          client->text("ERROR: Missing componentGroup field");
+          return;
+        }
+
+        Serial.printf("Processing action: %s for group: %s\n", action, group);
 
         if (strcmp(group, "pins") == 0) {
           if (strcmp(action, "configure") == 0) {
@@ -130,64 +151,250 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             String id = config["id"];
             String name = config["name"];
             uint8_t pin = config["pin"];
-            String typeStr = config["type"];
+            String mode = config["mode"] | "output";
+            String pinType = config["pinType"] | "digital";
+            PinPullMode pullMode =
+                static_cast<PinPullMode>(config["pullMode"] | 0);
+            uint16_t debounceMs = config["debounceMs"] | 0;
 
-            if (id.isEmpty() || name.isEmpty() || typeStr.isEmpty()) {
+            if (id.isEmpty() || name.isEmpty()) {
               client->text("ERROR: Missing required config fields for pin");
               return;
             }
 
-            uint8_t targetMode = INPUT;
-            if (typeStr == "Digital Output")
-              targetMode = OUTPUT;
-            else if (typeStr == "Digital Input")
-              targetMode = INPUT;
-            else if (typeStr == "Digital Input Pullup")
-              targetMode = INPUT_PULLUP;
-            else {
-              client->text("ERROR: Invalid pin type specified");
-              return;
+            // Look for existing pin config
+            IoPinConfig *existingPin = findPinById(id);
+
+            // Clean up existing pin if needed
+            if (existingPin) {
+              // Clean up existing debouncer
+              if (existingPin->debouncer) {
+                delete existingPin->debouncer;
+                existingPin->debouncer = nullptr;
+              }
+
+              // Reset pin to safe state
+              if (existingPin->pinType == "pwm") {
+                ledcDetachPin(existingPin->pin);
+              }
             }
 
-            IoPinConfig *existingPin = findPinById(id);
+            // Setup pin based on mode and type
+            if (mode == "output") {
+              if (pinType == "digital") {
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, LOW);
+              } else if (pinType == "pwm") {
+                // Configure PWM for ESP32
+                ledcSetup(pin % 16, 5000, 8);  // Channel, frequency, resolution
+                ledcAttachPin(pin, pin % 16);
+                ledcWrite(pin % 16, 0);
+              }
+              // For analog output, we use DAC which will be handled during
+              // write operations
+            } else {
+              // Input mode with appropriate pull resistors
+              if (pinType == "digital") {
+                if (pullMode == PULL_UP) {
+                  pinMode(pin, INPUT_PULLUP);
+                } else if (pullMode == PULL_DOWN) {
+                  pinMode(pin, INPUT_PULLDOWN);
+                } else {
+                  pinMode(pin, INPUT);
+                }
+              } else {
+                // Analog input - set pin appropriately
+                pinMode(pin, INPUT);
+              }
+            }
+
+            // Store the configuration
             if (existingPin) {
               existingPin->name = name;
               existingPin->pin = pin;
-              existingPin->mode = targetMode;
-              existingPin->lastState = -1;
-              pinMode(pin, targetMode);
-              if (targetMode == OUTPUT) digitalWrite(pin, LOW);
-            } else {
-              IoPinConfig newPin = {id, name, pin, targetMode, -1};
-              configuredPins.push_back(newPin);
-              pinMode(pin, targetMode);
-              if (targetMode == OUTPUT) digitalWrite(pin, LOW);
-            }
-            client->text("OK: Pin configured");
+              existingPin->mode = mode;
+              existingPin->pinType = pinType;
+              existingPin->lastValue = -1;
+              existingPin->pullMode = pullMode;
+              existingPin->debounceMs = debounceMs;
 
-          } else if (strcmp(action, "control") == 0) {
-            String id = doc["id"];
-            bool state = doc["state"];
-            IoPinConfig *pinToControl = findPinById(id);
-            if (pinToControl && pinToControl->mode == OUTPUT) {
-              digitalWrite(pinToControl->pin, state ? HIGH : LOW);
-              client->text("OK: Pin controlled");
+              // Setup debouncer for digital inputs
+              if (mode == "input" && pinType == "digital" && debounceMs > 0) {
+                existingPin->debouncer = new Bounce();
+                existingPin->debouncer->attach(pin);
+                existingPin->debouncer->interval(debounceMs);
+              }
             } else {
-              client->text("ERROR: Pin not found or not configured as Output");
+              IoPinConfig newPin = {id, name,     pin,        pinType, mode,
+                                    -1, pullMode, debounceMs, nullptr};
+
+              // Setup debouncer for digital inputs
+              if (mode == "input" && pinType == "digital" && debounceMs > 0) {
+                newPin.debouncer = new Bounce();
+                newPin.debouncer->attach(pin);
+                newPin.debouncer->interval(debounceMs);
+              }
+
+              configuredPins.push_back(newPin);
             }
+
+            // Send success response
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["message"] = "Pin configured";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "readPin") == 0) {
+            // Handle manual pin reading
+            String id = doc["id"];
+            IoPinConfig *pinToRead = findPinById(id);
+
+            if (!pinToRead) {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            if (pinToRead->mode != "input") {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin is not configured as input";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            int value = 0;
+            if (pinToRead->pinType == "digital") {
+              value = digitalRead(pinToRead->pin);
+            } else if (pinToRead->pinType == "analog") {
+              value = analogRead(pinToRead->pin);
+            }
+
+            pinToRead->lastValue = value;
+
+            // Send back the read value
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["id"] = pinToRead->id;
+            response["value"] = value;
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "writePin") == 0) {
+            // Handle pin value updates
+            String id = doc["id"];
+            int value = doc["value"];
+            String type = doc["type"] | "digital";
+
+            IoPinConfig *pinToWrite = findPinById(id);
+
+            if (!pinToWrite) {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            if (pinToWrite->mode != "output") {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin is not configured as output";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            // Update pin based on type
+            if (type == "digital") {
+              digitalWrite(pinToWrite->pin, value ? HIGH : LOW);
+            } else if (type == "pwm") {
+              ledcWrite(pinToWrite->pin % 16, value);
+            } else if (type == "analog") {
+              if (pinToWrite->pin == 25 || pinToWrite->pin == 26) {
+                // These are the DAC pins on ESP32
+                dacWrite(pinToWrite->pin, value > 255 ? 255 : value);
+              } else {
+                StaticJsonDocument<128> response;
+                response["status"] = "ERROR";
+                response["message"] = "Pin does not support analog output";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+                return;
+              }
+            }
+
+            pinToWrite->lastValue = value;
+
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["message"] = "Pin value updated";
+            response["id"] = pinToWrite->id;
+            response["value"] = value;
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
 
           } else if (strcmp(action, "remove") == 0) {
             String id = doc["id"];
+            bool pinFound = false;
+
             for (auto it = configuredPins.begin(); it != configuredPins.end();
                  ++it) {
               if (it->id == id) {
-                pinMode(it->pin, INPUT);
+                // Clean up the pin
+                if (it->pinType == "pwm") {
+                  ledcDetachPin(it->pin);
+                } else {
+                  pinMode(it->pin, INPUT);  // Reset to safe state
+                }
+
+                // Clean up debouncer
+                if (it->debouncer) {
+                  delete it->debouncer;
+                  it->debouncer = nullptr;
+                }
+
                 configuredPins.erase(it);
                 lastPinReadTime.erase(id);
-                client->text("OK: Pin removed");
+                pinFound = true;
                 break;
               }
             }
+
+            StaticJsonDocument<128> response;
+            if (pinFound) {
+              response["status"] = "OK";
+              response["message"] = "Pin removed";
+            } else {
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+            }
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
           }
         }
 
@@ -489,21 +696,54 @@ void loop() {
     lastIpPrintTime = now;
   }
 
+  // Check and update input pins
   for (auto &pin : configuredPins) {
-    if (pin.mode == INPUT || pin.mode == INPUT_PULLUP) {
-      if (now - lastPinReadTime[pin.id] >= inputReadInterval) {
-        lastPinReadTime[pin.id] = now;
-        int state = digitalRead(pin.pin);
-        if (state != pin.lastState) {
-          pin.lastState = state;
-          StaticJsonDocument<128> msg;
-          msg["type"] = "pinUpdate";
-          msg["id"] = pin.id;
-          msg["state"] = state;
-          String out;
-          serializeJson(msg, out);
-          ws.textAll(out);
+    if (pin.mode == "input") {
+      bool shouldUpdate = false;
+      int currentValue = 0;
+
+      if (pin.pinType == "digital") {
+        if (pin.debouncer) {
+          // Use debouncer for digital inputs with debouncing enabled
+          pin.debouncer->update();
+          if (pin.debouncer->changed()) {
+            currentValue = pin.debouncer->read();
+            shouldUpdate = true;
+          }
+        } else {
+          // Regular digital read for non-debounced pins
+          currentValue = digitalRead(pin.pin);
+          if (currentValue != pin.lastValue) {
+            shouldUpdate = true;
+          }
         }
+      } else if (pin.pinType == "analog") {
+        // Only read analog values at specified intervals
+        if (now - lastPinReadTime[pin.id] >= analogInputReadInterval) {
+          lastPinReadTime[pin.id] = now;
+          currentValue = analogRead(pin.pin);
+
+          // For analog, only update if value changed by more than 1%
+          int threshold = 10;  // About 1% of 1023
+          if (abs(currentValue - pin.lastValue) > threshold) {
+            shouldUpdate = true;
+          }
+        }
+      }
+
+      if (shouldUpdate) {
+        pin.lastValue = currentValue;
+
+        // Send update to all websocket clients
+        StaticJsonDocument<128> msg;
+        msg["id"] = pin.id;
+        msg["value"] = currentValue;
+        msg["type"] = pin.pinType;
+        msg["mode"] = pin.mode;
+
+        String out;
+        serializeJson(msg, out);
+        ws.textAll(out);
       }
     }
   }

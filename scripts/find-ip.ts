@@ -13,9 +13,9 @@ const isProd = process.env.NODE_ENV === "production";
 
 // Calculate the correct IP file path based on environment
 let ipFilePath: string;
+
 if (isProd) {
-  // In production, we're likely a packaged app, so use a more absolute path
-  // AppData directory is a good location for user data
+  // In production, use the AppData directory or equivalent
   const appDataPath =
     process.env.APPDATA ||
     (process.platform === "darwin"
@@ -27,12 +27,17 @@ if (isProd) {
 
   // Ensure directory exists
   const dirPath = path.dirname(ipFilePath);
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      console.log(`[IP Finder] Created directory: ${dirPath}`);
+    }
+  } catch (err) {
+    console.error(`[IP Finder] Error creating directory: ${dirPath}`, err);
   }
 } else {
-  // In development, use the project root
-  ipFilePath = path.join(__dirname, "..", ".ip_address");
+  // In development, use the current working directory (project root)
+  ipFilePath = path.join(process.cwd(), ".ip_address");
 }
 
 console.log(`[IP Finder] Using IP file path: ${ipFilePath}`);

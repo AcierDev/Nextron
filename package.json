@@ -8,7 +8,6 @@
   "scripts": {
     "dev:find-ip": "tsx watch scripts/find-ip.ts",
     "dev": "nextron",
-    "prebuild": "npx tsc scripts/find-ip.ts --outDir dist/scripts --esModuleInterop true",
     "build": "nextron build",
     "postinstall": "electron-builder install-app-deps"
   },

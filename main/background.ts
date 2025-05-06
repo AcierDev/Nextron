@@ -273,6 +273,7 @@ function getPioPath(): string {
   const mainWindow = createWindow("main", {
     width: 1000,
     height: 600,
+    fullscreen: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
     },
@@ -284,7 +285,7 @@ function getPioPath(): string {
   });
 
   if (isProd) {
-    await mainWindow.loadURL("app://./home");
+    await mainWindow.loadURL("app://./home.html");
   } else {
     const port = process.argv[2];
     await mainWindow.loadURL(`http://localhost:${port}/home`);
@@ -387,3 +388,95 @@ ipcMain.handle("stop-ip-finder", async () => {
   stopIpFinder();
   return { success: true };
 });
+
+// IPC handler to start the IP finder script and wait for detection
+ipcMain.handle("start-ip-finder-and-wait", async (event, timeoutMs = 30000) => {
+  try {
+    // First, stop any existing IP finder
+    stopIpFinder();
+
+    // Start the IP finder
+    const startSuccess = startIpFinder();
+    if (!startSuccess) {
+      return { success: false, error: "Failed to start IP finder script" };
+    }
+
+    // Wait for IP detection
+    const detected = await waitForIpDetection(timeoutMs);
+
+    return {
+      success: true,
+      ipDetected: detected,
+      message: detected ? "IP detected successfully" : "IP detection timed out",
+    };
+  } catch (error) {
+    console.error("Error in start-ip-finder-and-wait:", error);
+    return { success: false, error: String(error) };
+  }
+});
+
+/**
+ * Check if the IP finder detected an IP successfully
+ * @param timeoutMs Maximum time to wait for IP detection (in milliseconds)
+ * @returns Promise that resolves to true if IP was found, false if timed out
+ */
+function waitForIpDetection(timeoutMs = 30000): Promise<boolean> {
+  return new Promise((resolve) => {
+    // Get the IP file path using the same logic as in ip-handler.ts
+    const getIpFilePath = (): string => {
+      const isProd = process.env.NODE_ENV === "production";
+
+      if (isProd) {
+        const appDataPath =
+          process.env.APPDATA ||
+          (process.platform === "darwin"
+            ? path.join(
+                process.env.HOME || "",
+                "Library",
+                "Application Support"
+              )
+            : path.join(process.env.HOME || "", ".config"));
+
+        const appName = "My Nextron App";
+        return path.join(appDataPath, appName, ".ip_address");
+      } else {
+        return path.join(process.cwd(), ".ip_address");
+      }
+    };
+
+    const ipFilePath = getIpFilePath();
+    console.log(`[IP Detection] Waiting for IP file at: ${ipFilePath}`);
+
+    // Set a timeout
+    const timeoutId = setTimeout(() => {
+      clearInterval(checkIntervalId);
+      console.log(`[IP Detection] Timed out after ${timeoutMs}ms`);
+      resolve(false);
+    }, timeoutMs);
+
+    // Check for the IP file periodically
+    const checkIntervalId = setInterval(() => {
+      if (fs.existsSync(ipFilePath)) {
+        try {
+          const content = fs.readFileSync(ipFilePath, "utf-8").trim();
+          // If we have a valid IP (not an error message)
+          if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(content)) {
+            clearTimeout(timeoutId);
+            clearInterval(checkIntervalId);
+            console.log(`[IP Detection] Found IP: ${content}`);
+            resolve(true);
+            return;
+          } else if (content.startsWith("ERROR:")) {
+            clearTimeout(timeoutId);
+            clearInterval(checkIntervalId);
+            console.error(`[IP Detection] Error in IP file: ${content}`);
+            resolve(false);
+            return;
+          }
+        } catch (error) {
+          console.error(`[IP Detection] Error reading IP file:`, error);
+        }
+      }
+    }, 1000);
+  });
+}

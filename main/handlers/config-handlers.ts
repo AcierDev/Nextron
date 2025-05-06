@@ -18,7 +18,20 @@ async function handleGetConfigs() {
   try {
     const collection = await getConfigurationsCollection();
     const configs = await collection
-      .find({}, { projection: { _id: 1, name: 1 } })
+      .find(
+        {},
+        {
+          projection: {
+            _id: 1,
+            name: 1,
+            description: 1,
+            updatedAt: 1,
+            "hardware.servos": 1,
+            "hardware.steppers": 1,
+            "hardware.pins": 1,
+          },
+        }
+      )
       .sort({ name: 1 })
       .toArray();
     console.log("[Main:handleGetConfigs] Fetched:", configs.length, "configs");
@@ -35,7 +48,8 @@ async function handleGetConfigs() {
 // Handler for creating a new config
 async function handleCreateConfig(
   _event: Electron.IpcMainInvokeEvent,
-  name: string
+  name: string,
+  description: string = ""
 ) {
   try {
     if (!name || typeof name !== "string" || name.trim().length === 0) {
@@ -46,6 +60,7 @@ async function handleCreateConfig(
 
     const collection = await getConfigurationsCollection();
     const trimmedName = name.trim();
+    const trimmedDescription = description ? description.trim() : "";
 
     // Check if config name already exists (case-insensitive)
     const existingConfig = await collection.findOne({
@@ -58,6 +73,7 @@ async function handleCreateConfig(
 
     const newConfig: Omit<SavedConfigDocument, "_id"> = {
       name: trimmedName,
+      description: trimmedDescription,
       // Define default hardware structure upon creation
       hardware: {
         servos: [],
@@ -131,7 +147,8 @@ async function handleGetConfigById(
 async function handleUpdateConfig(
   _event: Electron.IpcMainInvokeEvent,
   configId: string,
-  hardware: HardwareConfig
+  hardware: HardwareConfig,
+  description?: string
 ) {
   if (!isValidObjectId(configId)) {
     throw new Error("Invalid Configuration ID format");
@@ -144,14 +161,20 @@ async function handleUpdateConfig(
 
   try {
     const collection = await getConfigurationsCollection();
+
+    const updateData: any = {
+      hardware: hardware,
+      updatedAt: new Date(),
+    };
+
+    // Only include description in update if it's provided
+    if (description !== undefined) {
+      updateData.description = description.trim();
+    }
+
     const updateResult = await collection.updateOne(
       { _id: new ObjectId(configId) },
-      {
-        $set: {
-          hardware: hardware, // Assume 'hardware' object is complete and valid
-          updatedAt: new Date(),
-        },
-      }
+      { $set: updateData }
     );
 
     if (updateResult.matchedCount === 0) {
@@ -260,6 +283,52 @@ async function handleRenameConfig(
   }
 }
 
+// Handler specifically for updating the description
+async function handleUpdateDescription(
+  _event: Electron.IpcMainInvokeEvent,
+  configId: string,
+  description: string
+) {
+  if (!isValidObjectId(configId)) {
+    throw new Error("Invalid Configuration ID format");
+  }
+
+  try {
+    const collection = await getConfigurationsCollection();
+    const trimmedDescription = description.trim();
+
+    const updateResult = await collection.updateOne(
+      { _id: new ObjectId(configId) },
+      {
+        $set: {
+          description: trimmedDescription,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (updateResult.matchedCount === 0) {
+      throw new Error("Configuration not found");
+    }
+
+    console.log(
+      `[Main:handleUpdateDescription] Updated description for config ID: ${configId}`
+    );
+    return {
+      success: true,
+      message: "Configuration description updated successfully",
+    };
+  } catch (error: any) {
+    console.error(
+      `[Main:handleUpdateDescription] Error updating description for config ID ${configId}:`,
+      error
+    );
+    throw new Error(
+      `Error updating configuration description: ${error.message}`
+    );
+  }
+}
+
 // Updated setup function
 export function setupConfigHandlers() {
   ipcMain.handle("get-configs", handleGetConfigs);
@@ -268,4 +337,5 @@ export function setupConfigHandlers() {
   ipcMain.handle("update-config", handleUpdateConfig);
   ipcMain.handle("delete-config", handleDeleteConfig);
   ipcMain.handle("rename-config", handleRenameConfig);
+  ipcMain.handle("update-description", handleUpdateDescription);
 }

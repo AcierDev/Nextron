@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld("electron", {
   },
   startIpFinder: () => ipcRenderer.invoke("start-ip-finder"),
   stopIpFinder: () => ipcRenderer.invoke("stop-ip-finder"),
+  startIpFinderAndWait: (timeoutMs = 30000) =>
+    ipcRenderer.invoke("start-ip-finder-and-wait", timeoutMs),
 });
 
 export type IpcHandler = typeof handler;

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { PlusCircle, ArrowLeft, Save, Loader2 } from "lucide-react";
 import StepperCardDesign2 from "@/components/StepperCardDesign2";
 import ServoCardHybrid from "@/components/ServoCardHybrid";
+import IOPinCard from "@/components/IOPinCard";
+import { NewComponentDialog } from "@/components/NewComponentDialog";
 import {
   Dialog,
   DialogContent,
@@ -77,7 +79,17 @@ type ServoMotorDisplay = {
   };
 };
 
-type MotorDisplay = StepperMotorDisplay | ServoMotorDisplay;
+type IOPinDisplay = {
+  id: string;
+  type: "iopin";
+  name: string;
+  pinNumber: number;
+  mode: "input" | "output";
+  pinType: "digital" | "analog" | "pwm";
+  value: number;
+};
+
+type MotorDisplay = StepperMotorDisplay | ServoMotorDisplay | IOPinDisplay;
 
 // Define the Configuration display type (simplified for dashboard header)
 type ConfigurationDisplay = {
@@ -296,18 +308,9 @@ export default function Dashboard() {
   const [isSaving, setIsSaving] = useState(false);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
 
-  // Motor Dialog state (remains the same)
+  // Motor Dialog state
   const [isNewMotorOpen, setIsNewMotorOpen] = useState(false);
-  const [newMotorType, setNewMotorType] = useState<"stepper" | "servo">(
-    "stepper"
-  );
-  const [newMotorName, setNewMotorName] = useState("");
-  const [newMotorPins, setNewMotorPins] = useState({
-    step: 0,
-    direction: 0,
-    enable: 0,
-    control: 0,
-  });
+
   const [editingMotor, setEditingMotor] = useState<MotorDisplay | null>(null);
   const [editPins, setEditPins] = useState({
     step: 0,
@@ -366,6 +369,36 @@ export default function Dashboard() {
             direction: stepper.pins[1],
             enable: stepper.pins[2],
           },
+        });
+      });
+
+      // Transform pins array to IOPinDisplay objects
+      hwConfig.pins.forEach((pin) => {
+        // Extract pin properties from the component
+        const mode = pin.type.includes("input") ? "input" : "output";
+        let pinType: "digital" | "analog" | "pwm" = "digital";
+
+        if (pin.type.includes("analog")) {
+          pinType = "analog";
+        } else if (pin.type.includes("pwm")) {
+          pinType = "pwm";
+        }
+
+        displayMotors.push({
+          id: pin.id,
+          type: "iopin",
+          name: pin.name,
+          pinNumber: pin.pins[0],
+          mode: mode,
+          pinType: pinType,
+          value:
+            mode === "input"
+              ? 0
+              : pinType === "digital"
+              ? 0
+              : pinType === "analog"
+              ? 512
+              : 128,
         });
       });
 
@@ -501,6 +534,17 @@ export default function Dashboard() {
 
           if (message.id !== undefined) {
             updateId = message.id;
+
+            // Forward message to IOPinCard components through a custom event
+            if (message.value !== undefined || message.status !== undefined) {
+              // Create and dispatch a custom event with the message data
+              const customEvent = new CustomEvent("websocket-message", {
+                detail: message,
+              });
+              window.dispatchEvent(customEvent);
+            }
+
+            // Extract the value based on various possible fields
             if (message.state !== undefined) {
               stateValue = message.state;
             } else if (message.value !== undefined) {
@@ -537,6 +581,12 @@ export default function Dashboard() {
                     typeof stateValue === "number"
                   ) {
                     return { ...motor, position: stateValue };
+                  }
+                  if (
+                    motor.type === "iopin" &&
+                    typeof stateValue === "number"
+                  ) {
+                    return { ...motor, value: stateValue };
                   }
                 }
                 return motor;
@@ -932,10 +982,13 @@ export default function Dashboard() {
     if (hardwareConfig.servos.some((m) => m.id === id)) group = "servos";
     else if (hardwareConfig.steppers.some((m) => m.id === id))
       group = "steppers";
+    else if (hardwareConfig.pins.some((m) => m.id === id)) group = "pins";
 
     if (!group) {
-      console.error(`Cannot delete motor ${id}: Not found in hardware config.`);
-      setErrorMessage("Failed to find motor to delete.");
+      console.error(
+        `Cannot delete component ${id}: Not found in hardware config.`
+      );
+      setErrorMessage("Failed to find component to delete.");
       return;
     }
 
@@ -955,7 +1008,7 @@ export default function Dashboard() {
       return newStates;
     });
 
-    setInfoMessage("Motor removed. Remember to Save Configuration.");
+    setInfoMessage("Component removed. Remember to Save Configuration.");
   };
 
   useEffect(() => {
@@ -977,13 +1030,18 @@ export default function Dashboard() {
         (m) => m.id === motorToDup.id
       );
       group = "steppers";
+    } else if (motorToDup.type === "iopin") {
+      originalComponent = hardwareConfig.pins.find(
+        (m) => m.id === motorToDup.id
+      );
+      group = "pins";
     }
 
     if (!originalComponent || !group) {
       console.error(
-        `Cannot duplicate motor ${motorToDup.id}: Original not found.`
+        `Cannot duplicate component ${motorToDup.id}: Original not found.`
       );
-      setErrorMessage("Failed to find original motor to duplicate.");
+      setErrorMessage("Failed to find original component to duplicate.");
       return;
     }
 
@@ -1027,6 +1085,15 @@ export default function Dashboard() {
         configPayload.maxSpeed = duplicatedComponent.maxSpeed;
       if (duplicatedComponent.acceleration !== undefined)
         configPayload.acceleration = duplicatedComponent.acceleration;
+    } else if (group === "pins") {
+      configPayload.pin = duplicatedComponent.pins[0];
+      // For IO pins, extract mode and type from the component.type string
+      // Format is expected to be like "digital_output" or "analog_input"
+      const typeParts = duplicatedComponent.type.split("_");
+      if (typeParts.length === 2) {
+        configPayload.pinType = typeParts[0]; // "digital", "analog", or "pwm"
+        configPayload.mode = typeParts[1]; // "input" or "output"
+      }
     }
     sendMessage({
       action: "configure",
@@ -1034,7 +1101,7 @@ export default function Dashboard() {
       config: configPayload,
     });
 
-    setInfoMessage("Motor duplicated. Remember to Save Configuration.");
+    setInfoMessage("Component duplicated. Remember to Save Configuration.");
   };
 
   // Handle opening edit pins dialog
@@ -1047,12 +1114,20 @@ export default function Dashboard() {
         enable: motor.pins.enable || 0,
         control: 0,
       });
-    } else {
+    } else if (motor.type === "servo") {
       setEditPins({
         step: 0,
         direction: 0,
         enable: 0,
         control: motor.pins.control,
+      });
+    } else if (motor.type === "iopin") {
+      // For IO pins we only use a single pin
+      setEditPins({
+        step: 0,
+        direction: 0,
+        enable: 0,
+        control: motor.pinNumber, // Store the pin number in the control field temporarily
       });
     }
     toast({
@@ -1065,16 +1140,23 @@ export default function Dashboard() {
   const handleSavePins = () => {
     if (!editingMotor) return;
 
-    const group = editingMotor.type === "stepper" ? "steppers" : "servos";
+    let group: keyof HardwareConfig;
     let pinsArray: number[];
     let updatedComponent: Partial<ConfiguredComponent> = { pins: [] };
 
     if (editingMotor.type === "stepper") {
+      group = "steppers";
       pinsArray = [editPins.step, editPins.direction];
       if (editPins.enable) pinsArray.push(editPins.enable);
       updatedComponent.pins = pinsArray;
-    } else {
+    } else if (editingMotor.type === "servo") {
+      group = "servos";
       pinsArray = [editPins.control];
+      updatedComponent.pins = pinsArray;
+    } else {
+      // IO Pin
+      group = "pins";
+      pinsArray = [editPins.control]; // Using the control field for the pin number
       updatedComponent.pins = pinsArray;
     }
 
@@ -1107,6 +1189,14 @@ export default function Dashboard() {
           configPayload.maxSpeed = originalComponent.maxSpeed;
         if (originalComponent.acceleration !== undefined)
           configPayload.acceleration = originalComponent.acceleration;
+      } else if (group === "pins") {
+        configPayload.pin = editPins.control;
+        // Extract mode and type from component.type (e.g., "digital_output")
+        const typeParts = originalComponent.type.split("_");
+        if (typeParts.length === 2) {
+          configPayload.pinType = typeParts[0];
+          configPayload.mode = typeParts[1];
+        }
       }
       sendMessage({
         action: "configure",
@@ -1117,72 +1207,6 @@ export default function Dashboard() {
 
     setEditingMotor(null);
     setInfoMessage("Pins updated. Remember to Save Configuration.");
-  };
-
-  // Handle creating a new motor
-  const handleCreateMotor = () => {
-    if (!newMotorName.trim()) {
-      toast({
-        title: "Error",
-        description: "Motor name cannot be empty.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const id = `${newMotorType}-${Date.now()}`;
-    let newComponentData: ConfiguredComponent;
-    let group: keyof HardwareConfig;
-    let configPayload: any = { id: id, name: newMotorName.trim() };
-
-    if (newMotorType === "stepper") {
-      group = "steppers";
-      const pins = [newMotorPins.step, newMotorPins.direction];
-      if (newMotorPins.enable) pins.push(newMotorPins.enable);
-      newComponentData = {
-        id,
-        type: "Stepper",
-        name: newMotorName.trim(),
-        pins: pins,
-        maxSpeed: 1000,
-        acceleration: 500,
-      };
-      configPayload.pulPin = newMotorPins.step;
-      configPayload.dirPin = newMotorPins.direction;
-      if (newMotorPins.enable) configPayload.enaPin = newMotorPins.enable;
-      configPayload.maxSpeed = 1000;
-      configPayload.acceleration = 500;
-    } else {
-      group = "servos";
-      newComponentData = {
-        id,
-        type: "Servo",
-        name: newMotorName.trim(),
-        pins: [newMotorPins.control],
-        minAngle: 0,
-        maxAngle: 180,
-      };
-      configPayload.pin = newMotorPins.control;
-      configPayload.minAngle = 0;
-      configPayload.maxAngle = 180;
-    }
-
-    setHardwareConfig((prev) => ({
-      ...prev,
-      [group]: [...prev[group], newComponentData],
-    }));
-
-    sendMessage({
-      action: "configure",
-      componentGroup: group,
-      config: configPayload,
-    });
-
-    setNewMotorName("");
-    setNewMotorPins({ step: 0, direction: 0, enable: 0, control: 0 });
-    setNewMotorType("stepper");
-    setIsNewMotorOpen(false);
-    setInfoMessage("Motor added. Remember to Save Configuration.");
   };
 
   // Handle saving the configuration
@@ -1529,7 +1553,7 @@ export default function Dashboard() {
               disabled={isSaving}
             >
               <PlusCircle className="h-4 w-4" />
-              Add Motor
+              Add Component
             </Button>
             <Button
               className="flex items-center gap-2"
@@ -1549,210 +1573,158 @@ export default function Dashboard() {
         {motors.length === 0 ? (
           <div className="text-center py-12">
             <h2 className="text-xl font-semibold mb-2 text-gray-800 dark:text-gray-200">
-              No Motors Added
+              No Components Added
             </h2>
             <p className="text-gray-500 dark:text-gray-400 mb-6">
-              Add your first motor to this configuration
+              Add your first component to this configuration
             </p>
             <Button onClick={() => setIsNewMotorOpen(true)} disabled={isSaving}>
               <PlusCircle className="h-4 w-4 mr-2" />
-              Add Motor
+              Add Component
             </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {motors.map((motor) =>
-              motor.type === "stepper" ? (
-                <StepperCardDesign2
-                  key={motor.id}
-                  id={motor.id}
-                  name={motor.name}
-                  position={
-                    (componentStates[motor.id] as number) ?? motor.position
-                  }
-                  speed={motor.speed}
-                  acceleration={motor.acceleration}
-                  stepsPerInch={motor.stepsPerInch}
-                  minPosition={motor.minPosition}
-                  maxPosition={motor.maxPosition}
-                  pins={motor.pins}
-                  onDelete={() => handleDeleteMotor(motor.id)}
-                  onDuplicate={() => handleDuplicateMotor(motor)}
-                  onEditPins={() => handleEditPins(motor)}
-                  sendMessage={sendMessage}
-                />
-              ) : (
-                <ServoCardHybrid
-                  key={motor.id}
-                  id={motor.id}
-                  name={motor.name}
-                  angle={(componentStates[motor.id] as number) ?? motor.angle}
-                  minAngle={motor.minAngle}
-                  maxAngle={motor.maxAngle}
-                  pins={motor.pins}
-                  onDelete={() => handleDeleteMotor(motor.id)}
-                  onDuplicate={() => handleDuplicateMotor(motor)}
-                  onEditPins={() => handleEditPins(motor)}
-                  sendMessage={sendMessage}
-                />
-              )
-            )}
+            {motors.map((motor) => {
+              if (motor.type === "stepper") {
+                return (
+                  <StepperCardDesign2
+                    key={motor.id}
+                    id={motor.id}
+                    name={motor.name}
+                    position={
+                      (componentStates[motor.id] as number) ?? motor.position
+                    }
+                    speed={motor.speed}
+                    acceleration={motor.acceleration}
+                    stepsPerInch={motor.stepsPerInch}
+                    minPosition={motor.minPosition}
+                    maxPosition={motor.maxPosition}
+                    pins={motor.pins}
+                    onDelete={() => handleDeleteMotor(motor.id)}
+                    onDuplicate={() => handleDuplicateMotor(motor)}
+                    onEditPins={() => handleEditPins(motor)}
+                    sendMessage={sendMessage}
+                  />
+                );
+              } else if (motor.type === "servo") {
+                return (
+                  <ServoCardHybrid
+                    key={motor.id}
+                    id={motor.id}
+                    name={motor.name}
+                    angle={(componentStates[motor.id] as number) ?? motor.angle}
+                    minAngle={motor.minAngle}
+                    maxAngle={motor.maxAngle}
+                    pins={motor.pins}
+                    onDelete={() => handleDeleteMotor(motor.id)}
+                    onDuplicate={() => handleDuplicateMotor(motor)}
+                    onEditPins={() => handleEditPins(motor)}
+                    sendMessage={sendMessage}
+                  />
+                );
+              } else if (motor.type === "iopin") {
+                return (
+                  <IOPinCard
+                    key={motor.id}
+                    id={motor.id}
+                    name={motor.name}
+                    pinNumber={motor.pinNumber}
+                    mode={motor.mode}
+                    type={motor.pinType}
+                    value={(componentStates[motor.id] as number) ?? motor.value}
+                    onDelete={() => handleDeleteMotor(motor.id)}
+                    onDuplicate={() => handleDuplicateMotor(motor)}
+                    onEditPin={() => handleEditPins(motor)}
+                    sendMessage={sendMessage}
+                  />
+                );
+              }
+              return null;
+            })}
           </div>
         )}
       </div>
 
-      <Dialog open={isNewMotorOpen} onOpenChange={setIsNewMotorOpen}>
-        <DialogContent className="sm:max-w-[425px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-          <DialogHeader>
-            <DialogTitle className="text-gray-900 dark:text-white">
-              Add New Motor
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-4 space-y-4">
-            <div>
-              <Label
-                htmlFor="motor-name"
-                className="text-gray-700 dark:text-gray-300"
-              >
-                Motor Name
-              </Label>
-              <Input
-                id="motor-name"
-                value={newMotorName}
-                onChange={(e) => setNewMotorName(e.target.value)}
-                className="mt-1 bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white"
-              />
-            </div>
+      <NewComponentDialog
+        open={isNewMotorOpen}
+        onOpenChange={setIsNewMotorOpen}
+        onCreateComponent={(componentData) => {
+          const newId = `${componentData.type}-${Date.now()}`;
+          let componentGroup: keyof HardwareConfig;
+          let newComponent: ConfiguredComponent;
+          let configPayload: any = { id: newId, name: componentData.name };
 
-            <div>
-              <Label className="mb-2 block text-gray-700 dark:text-gray-300">
-                Motor Type
-              </Label>
-              <RadioGroup
-                className="text-gray-700 dark:text-gray-300"
-                value={newMotorType}
-                onValueChange={(value: "stepper" | "servo") =>
-                  setNewMotorType(value)
-                }
-              >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="stepper" id="stepper" />
-                  <Label htmlFor="stepper">Stepper Motor</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="servo" id="servo" />
-                  <Label htmlFor="servo">Servo Motor</Label>
-                </div>
-              </RadioGroup>
-            </div>
+          if (componentData.type === "stepper") {
+            componentGroup = "steppers";
+            const pins = [
+              componentData.pins.step,
+              componentData.pins.direction,
+            ];
+            if (componentData.pins.enable) pins.push(componentData.pins.enable);
 
-            {newMotorType === "stepper" ? (
-              <div className="space-y-2">
-                <Label className="text-gray-700 dark:text-gray-300">
-                  Pin Configuration
-                </Label>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <Label
-                      htmlFor="step-pin"
-                      className="text-xs text-gray-600 dark:text-gray-400"
-                    >
-                      Step Pin
-                    </Label>
-                    <Input
-                      id="step-pin"
-                      type="number"
-                      value={newMotorPins.step}
-                      onChange={(e) =>
-                        setNewMotorPins({
-                          ...newMotorPins,
-                          step: Number(e.target.value),
-                        })
-                      }
-                      className="mt-1 bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <Label
-                      htmlFor="dir-pin"
-                      className="text-xs text-gray-600 dark:text-gray-400"
-                    >
-                      Direction Pin
-                    </Label>
-                    <Input
-                      id="dir-pin"
-                      type="number"
-                      value={newMotorPins.direction}
-                      onChange={(e) =>
-                        setNewMotorPins({
-                          ...newMotorPins,
-                          direction: Number(e.target.value),
-                        })
-                      }
-                      className="mt-1 bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <Label
-                      htmlFor="enable-pin"
-                      className="text-xs text-gray-600 dark:text-gray-400"
-                    >
-                      Enable Pin (Opt.)
-                    </Label>
-                    <Input
-                      id="enable-pin"
-                      type="number"
-                      value={newMotorPins.enable}
-                      onChange={(e) =>
-                        setNewMotorPins({
-                          ...newMotorPins,
-                          enable: Number(e.target.value),
-                        })
-                      }
-                      placeholder="None"
-                      className="mt-1 bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <Label
-                  htmlFor="control-pin"
-                  className="text-gray-700 dark:text-gray-300"
-                >
-                  Control Pin
-                </Label>
-                <Input
-                  id="control-pin"
-                  type="number"
-                  value={newMotorPins.control}
-                  onChange={(e) =>
-                    setNewMotorPins({
-                      ...newMotorPins,
-                      control: Number(e.target.value),
-                    })
-                  }
-                  className="mt-1 bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white"
-                />
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button
-                variant="outline"
-                className="text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button onClick={handleCreateMotor} disabled={!newMotorName.trim()}>
-              Create Motor
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            newComponent = {
+              id: newId,
+              type: "Stepper",
+              name: componentData.name,
+              pins: pins,
+              maxSpeed: 1000,
+              acceleration: 500,
+            };
+
+            configPayload.pulPin = componentData.pins.step;
+            configPayload.dirPin = componentData.pins.direction;
+            if (componentData.pins.enable)
+              configPayload.enaPin = componentData.pins.enable;
+            configPayload.maxSpeed = 1000;
+            configPayload.acceleration = 500;
+          } else if (componentData.type === "servo") {
+            componentGroup = "servos";
+            newComponent = {
+              id: newId,
+              type: "Servo",
+              name: componentData.name,
+              pins: [componentData.pins.control],
+              minAngle: 0,
+              maxAngle: 180,
+            };
+
+            configPayload.pin = componentData.pins.control;
+            configPayload.minAngle = 0;
+            configPayload.maxAngle = 180;
+          } else {
+            // IO Pin
+            componentGroup = "pins";
+            newComponent = {
+              id: newId,
+              type: `${componentData.pins.type}_${componentData.pins.mode}`, // e.g. "digital_output" or "analog_input"
+              name: componentData.name,
+              pins: [componentData.pins.pin],
+            };
+
+            configPayload.pin = componentData.pins.pin;
+            configPayload.mode = componentData.pins.mode;
+            configPayload.pinType = componentData.pins.type;
+          }
+
+          setHardwareConfig((prev) => ({
+            ...prev,
+            [componentGroup]: [...prev[componentGroup], newComponent],
+          }));
+
+          sendMessage({
+            action: "configure",
+            componentGroup: componentGroup,
+            config: configPayload,
+          });
+
+          setInfoMessage(
+            `${
+              componentData.type === "iopin" ? "IO Pin" : "Motor"
+            } added. Remember to Save Configuration.`
+          );
+        }}
+      />
 
       <Toaster />
     </div>

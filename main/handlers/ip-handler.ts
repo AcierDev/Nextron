@@ -15,10 +15,29 @@ function getIpFilePath(): string {
         : path.join(process.env.HOME || "", ".config"));
 
     const appName = "My Nextron App"; // Should match the name in find-ip.ts
-    return path.join(appDataPath, appName, ".ip_address");
+    const ipPath = path.join(appDataPath, appName, ".ip_address");
+
+    // Ensure the directory exists
+    const dirPath = path.dirname(ipPath);
+    try {
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+        console.log(`[IP Handler] Created directory: ${dirPath}`);
+      }
+    } catch (err) {
+      console.error(`[IP Handler] Error creating directory: ${dirPath}`, err);
+    }
+
+    console.log(`[IP Handler] Using production IP file path: ${ipPath}`);
+    return ipPath;
   } else {
     // In development, use the project root
-    return path.resolve(__dirname, "..", "..", ".ip_address");
+    // Calculate the project root in a more reliable way
+    const projectRoot = process.cwd();
+    const ipPath = path.join(projectRoot, ".ip_address");
+
+    console.log(`[IP Handler] Using development IP file path: ${ipPath}`);
+    return ipPath;
   }
 }
 
