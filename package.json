@@ -9,12 +9,10 @@
     "dev:find-ip": "tsx watch scripts/find-ip.ts",
     "dev": "nextron",
     "build": "nextron build",
-    "build:win": "nextron build --win --x64 && node scripts/postbuild-windows.js",
-    "build:win32": "nextron build --win --ia32 && node scripts/postbuild-windows.js",
+    "build:win": "nextron build --win --x64",
+    "build:win32": "nextron build --win --ia32",
     "build:all": "nextron build --all",
-    "postinstall": "electron-builder install-app-deps",
-    "rebuild-windows": "electron-rebuild -f -w serialport,@serialport/bindings-cpp",
-    "prepare-win-build": "npm run rebuild-windows && npm run build:win"
+    "postinstall": "electron-builder install-app-deps"
   },
   "build": {
     "appId": "com.everwood.control",
@@ -51,16 +49,7 @@
         "from": "resources",
         "to": "resources"
       }
-    ],
-    "extraMetadata": {
-      "main": "app/background.js"
-    },
-    "files": [
-      "app/**/*",
-      "node_modules/**/*",
-      "package.json"
-    ],
-    "asar": false
+    ]
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.11",
@@ -97,7 +86,6 @@
     "concurrently": "^9.1.2",
     "electron": "^31.0.1",
     "electron-builder": "^24.13.3",
-    "electron-rebuild": "^3.2.13",
     "next": "^14.2.4",
     "nextron": "^9.0.0",
     "postcss": "^8.4.38",

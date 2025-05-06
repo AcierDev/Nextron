@@ -7,9 +7,7 @@ import { setupIpHandlers } from "./handlers/ip-handler";
 import { setupConfigHandlers } from "./handlers/config-handlers";
 import { spawn, execSync, ChildProcess } from "child_process";
 import fs from "fs";
-// Import from our wrapper instead of directly
-import { safeRequireSerialport } from "./helpers/serialport-wrapper";
-
+import { SerialPort } from "serialport";
 // Load environment variables from .env file at the project root
 dotenv.config({ path: path.resolve(__dirname, "../.env") }); // Adjust path as needed
 
@@ -20,15 +18,6 @@ setupEnvironmentPath();
 
 // Store the reference to the IP finder process
 let ipFinderProcess: ChildProcess | null = null;
-
-// Load the SerialPort safely
-let SerialPort: any;
-try {
-  const serialport = safeRequireSerialport();
-  SerialPort = serialport.SerialPort;
-} catch (error) {
-  console.error("Failed to load SerialPort:", error);
-}
 
 function setupEnvironmentPath() {
   try {
