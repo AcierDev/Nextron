@@ -14,7 +14,7 @@ void initWebSocketServer() {
   ws.onEvent(onWebSocketEvent);
   server.addHandler(&ws);
   server.begin();
-  Serial.println("WebSocket server started");
+  Serial.println(F("WebSocket server started"));
 }
 
 void onWebSocketEvent(AsyncWebSocket *server_instance,
@@ -41,12 +41,12 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
         DeserializationError error = deserializeJson(doc, (char *)data);
         if (error) {
           Serial.printf("JSON DeserializationError: %s\n", error.c_str());
-          client->text("ERROR: Invalid JSON");
+          client->text(F("ERROR: Invalid JSON"));
           return;
         }
 
         // Debug: Print received message to Serial
-        Serial.println("Received JSON message:");
+        Serial.println(F("Received JSON message:"));
         serializeJsonPretty(doc, Serial);
         Serial.println();
 
@@ -54,12 +54,12 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
         const char *group = doc["componentGroup"];
 
         if (!action) {
-          client->text("ERROR: Missing action field");
+          client->text(F("ERROR: Missing action field"));
           return;
         }
 
         if (!group) {
-          client->text("ERROR: Missing componentGroup field");
+          client->text(F("ERROR: Missing componentGroup field"));
           return;
         }
 
@@ -75,7 +75,7 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
           handleSystemMessage(client, doc);
         } else {
           Serial.printf("Received unhandled group: %s\n", group);
-          client->text("ERROR: Unhandled component group");
+          client->text(F("ERROR: Unhandled component group"));
         }
       }
       break;
@@ -94,16 +94,16 @@ void handleSystemMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   const char *action = doc["action"];
   if (strcmp(action, "ping") == 0) {
     StaticJsonDocument<128> response;
-    response["status"] = "OK";
-    response["action"] = "pong";
-    response["componentGroup"] = "system";
+    response["status"] = F("OK");
+    response["action"] = F("pong");
+    response["componentGroup"] = F("system");
     response["timestamp"] = doc["timestamp"];  // Echo timestamp
 
     String jsonResponse;
     serializeJson(response, jsonResponse);
     client->text(jsonResponse);
   } else {
-    client->text("ERROR: Unknown system action");
+    client->text(F("ERROR: Unknown system action"));
   }
 }
 
@@ -121,7 +121,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     uint16_t debounceMs = config["debounceMs"] | 0;
 
     if (id.isEmpty() || name.isEmpty()) {
-      client->text("ERROR: Missing required config fields for pin");
+      client->text(F("ERROR: Missing required config fields for pin"));
       return;
     }
 
@@ -143,8 +143,8 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       configuredPins.push_back(newPin);
     }
     StaticJsonDocument<128> response;
-    response["status"] = "OK";
-    response["message"] = "Pin configured";
+    response["status"] = F("OK");
+    response["message"] = F("Pin configured");
     response["id"] = id;
     String jsonResponse;
     serializeJson(response, jsonResponse);
@@ -154,11 +154,11 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     String id = doc["id"];
     IoPinConfig *pinToRead = findPinById(id);
     if (!pinToRead) {
-      client->text("ERROR: Pin not found");
+      client->text(F("ERROR: Pin not found"));
       return;
     }
     if (pinToRead->mode != "input") {
-      client->text("ERROR: Pin is not configured as input");
+      client->text(F("ERROR: Pin is not configured as input"));
       return;
     }
     int value = 0;
@@ -169,7 +169,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     }
     pinToRead->lastValue = value;
     StaticJsonDocument<128> response;
-    response["status"] = "OK";
+    response["status"] = F("OK");
     response["id"] = pinToRead->id;
     response["value"] = value;
     String jsonResponse;
@@ -184,11 +184,11 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     IoPinConfig *pinToWrite = findPinById(id);
     if (!pinToWrite) {
-      client->text("ERROR: Pin not found");
+      client->text(F("ERROR: Pin not found"));
       return;
     }
     if (pinToWrite->mode != "output") {
-      client->text("ERROR: Pin is not configured as output");
+      client->text(F("ERROR: Pin is not configured as output"));
       return;
     }
 
@@ -200,14 +200,14 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (pinToWrite->pin == 25 || pinToWrite->pin == 26) {
         dacWrite(pinToWrite->pin, constrain(value, 0, 255));
       } else {
-        client->text("ERROR: Pin does not support analog output (DAC)");
+        client->text(F("ERROR: Pin does not support analog output (DAC)"));
         return;
       }
     }
     pinToWrite->lastValue = value;
     StaticJsonDocument<128> response;
-    response["status"] = "OK";
-    response["message"] = "Pin value updated";
+    response["status"] = F("OK");
+    response["message"] = F("Pin value updated");
     response["id"] = pinToWrite->id;
     response["value"] = value;
     String jsonResponse;
@@ -222,12 +222,12 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       cleanupPin(*it);  // Clean up before erasing
       configuredPins.erase(it, configuredPins.end());
       lastPinReadTime.erase(id);  // Remove from polling map
-      client->text("OK: Pin removed");
+      client->text(F("OK: Pin removed"));
     } else {
-      client->text("ERROR: Pin not found for removal");
+      client->text(F("ERROR: Pin not found for removal"));
     }
   } else {
-    client->text("ERROR: Unknown pin action");
+    client->text(F("ERROR: Unknown pin action"));
   }
 }
 
@@ -251,7 +251,7 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     if (cfg_id.isEmpty() || name.isEmpty() || pin == 0) {
       client->text(
-          "ERROR: Missing required servo config fields (id, name, pin)");
+          F("ERROR: Missing required servo config fields (id, name, pin)"));
       return;
     }
 
@@ -300,8 +300,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     }
 
     StaticJsonDocument<256> response;
-    response["status"] = "OK";
-    response["message"] = "Servo configured";
+    response["status"] = F("OK");
+    response["message"] = F("Servo configured");
     response["id"] =
         existingServo->id;  // Use ID from the (potentially new) servo
     response["pin"] = existingServo->pin;
@@ -311,7 +311,7 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     response["maxPulseWidth"] = existingServo->maxPulseWidth;
     response["speed"] = existingServo->speed;
     response["currentAngle"] = existingServo->currentAngle;
-    response["componentGroup"] = "servos";
+    response["componentGroup"] = F("servos");
     String jsonResponse;
     serializeJson(response, jsonResponse);
     client->text(jsonResponse);
@@ -320,19 +320,19 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
   // For other actions, servo must exist
   if (!servo) {
-    client->text("ERROR: Servo not found for control/action: " + id);
+    client->text(String(F("ERROR: Servo not found for control/action: ")) + id);
     return;
   }
 
   if (strcmp(action, "control") == 0) {
     StaticJsonDocument<128> response;  // For success responses
     response["id"] = servo->id;
-    response["componentGroup"] = "servos";
+    response["componentGroup"] = F("servos");
     bool action_taken = false;
 
     if (doc.containsKey("speed")) {
       servo->speed = constrain(doc["speed"].as<int>(), 1, 100);
-      response["status"] = "OK";
+      response["status"] = F("OK");
       response["speed"] = servo->speed;
       action_taken = true;
     }
@@ -349,7 +349,7 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         setServoPulseWidth(*servo, servo->targetPulseWidth);
         servo->isMoving = false;
       }
-      response["status"] = "OK";
+      response["status"] = F("OK");
       response["targetAngle"] = servo->targetAngle;
       response["currentAngle"] = servo->currentAngle;
       action_taken = true;
@@ -357,21 +357,21 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     if (doc.containsKey("command")) {
       String cmd = doc["command"].as<String>();
       action_taken = true;
-      if (cmd == "attach") {
+      if (cmd == F("attach")) {
         attachServoPWM(*servo);
-        response["status"] = "OK";
-        response["message"] = "Servo attached";
-      } else if (cmd == "detach") {
+        response["status"] = F("OK");
+        response["message"] = F("Servo attached");
+      } else if (cmd == F("detach")) {
         detachServoPWM(*servo);
-        response["status"] = "OK";
-        response["message"] = "Servo detached";
-      } else if (cmd == "reset") {
+        response["status"] = F("OK");
+        response["message"] = F("Servo detached");
+      } else if (cmd == F("reset")) {
         servo->targetAngle = constrain(90, servo->minAngle, servo->maxAngle);
         servo->targetPulseWidth = angleToPulseWidth(*servo, servo->targetAngle);
         servo->isMoving = true;
-        response["status"] = "OK";
+        response["status"] = F("OK");
         response["targetAngle"] = servo->targetAngle;
-      } else if (cmd == "setAngle") {  // Similar to 'angle' key
+      } else if (cmd == F("setAngle")) {  // Similar to 'angle' key
         if (doc.containsKey("value")) {
           int angleCmd = doc["value"];
           servo->targetAngle =
@@ -383,21 +383,21 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
             setServoPulseWidth(*servo, servo->targetPulseWidth);
             servo->isMoving = false;
           }
-          response["status"] = "OK";
+          response["status"] = F("OK");
           response["targetAngle"] = servo->targetAngle;
           response["currentAngle"] = servo->currentAngle;
         } else {
-          response["status"] = "ERROR";
-          response["message"] = "Missing 'value' for setAngle";
+          response["status"] = F("ERROR");
+          response["message"] = F("Missing 'value' for setAngle");
         }
-      } else if (cmd == "stop") {  // Stop gradual movement
+      } else if (cmd == F("stop")) {  // Stop gradual movement
         servo->isMoving = false;
-        response["status"] = "OK";
-        response["message"] = "Servo movement stopped";
+        response["status"] = F("OK");
+        response["message"] = F("Servo movement stopped");
         response["angle"] = servo->currentAngle;
       } else {
-        response["status"] = "ERROR";
-        response["message"] = "Unknown servo command";
+        response["status"] = F("ERROR");
+        response["message"] = F("Unknown servo command");
         action_taken = false;
       }
     }
@@ -409,7 +409,7 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     } else if (!doc.containsKey("speed") && !doc.containsKey("angle") &&
                !doc.containsKey("command")) {
       client->text(
-          "ERROR: No valid control key (speed, angle, command) for servo");
+          F("ERROR: No valid control key (speed, angle, command) for servo"));
     }
   } else if (strcmp(action, "remove") == 0) {
     auto it = std::remove_if(configuredServos.begin(), configuredServos.end(),
@@ -417,12 +417,12 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     if (it != configuredServos.end()) {
       detachServoPWM(*it);  // Detach before erasing
       configuredServos.erase(it, configuredServos.end());
-      client->text("OK: Servo removed: " + id);
+      client->text(String(F("OK: Servo removed: ")) + id);
     } else {
-      client->text("ERROR: Servo not found for removal: " + id);
+      client->text(String(F("ERROR: Servo not found for removal: ")) + id);
     }
   } else {
-    client->text("ERROR: Unknown servo action");
+    client->text(F("ERROR: Unknown servo action"));
   }
 }
 
@@ -445,7 +445,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     if (cfg_id.isEmpty() || name.isEmpty() || pulPin == 0 || dirPin == 0) {
       client->text(
-          "ERROR: Missing stepper config fields (id, name, pulPin, dirPin)");
+          F("ERROR: Missing stepper config fields (id, name, pulPin, dirPin)"));
       return;
     }
 
@@ -488,19 +488,19 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         configuredSteppers.push_back(newConfig);
         existingStepper = &configuredSteppers.back();
       } else {
-        client->text("ERROR: Failed to create stepper on pin " +
+        client->text(String(F("ERROR: Failed to create stepper on pin ")) +
                      String(pulPin));
         return;
       }
     }
     StaticJsonDocument<256> response;
-    response["status"] = "OK";
-    response["message"] = "Stepper configured";
+    response["status"] = F("OK");
+    response["message"] = F("Stepper configured");
     response["id"] = existingStepper->id;
     response["minPosition"] = existingStepper->minPosition;
     response["maxPosition"] = existingStepper->maxPosition;
     response["stepsPerInch"] = existingStepper->stepsPerInch;
-    response["componentGroup"] = "steppers";
+    response["componentGroup"] = F("steppers");
     String jsonResponse;
     serializeJson(response, jsonResponse);
     client->text(jsonResponse);
@@ -516,7 +516,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   if (strcmp(action, "control") == 0) {
     const char *command = doc["command"];
     if (!command) {
-      client->text("ERROR: Missing 'command' for stepper control");
+      client->text(F("ERROR: Missing 'command' for stepper control"));
       return;
     }
 
@@ -536,15 +536,18 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (doc.containsKey("stepsPerInch"))
         stepper->stepsPerInch = doc["stepsPerInch"].as<float>();
 
-      client->text("OK: Stepper params updated for " + id);
+      client->text(String(F("OK: Stepper params updated for ")) + id);
     } else if (strcmp(command, "move") == 0) {
       if (doc.containsKey("value")) {
         long targetPos = clampPosition(stepper, doc["value"].as<long>());
         stepper->stepper->moveTo(targetPos);
         stepper->targetPosition = targetPos;
-        client->text("OK: Stepper " + id + " moving to " + String(targetPos));
+        char buffer[100];
+        snprintf(buffer, sizeof(buffer), "OK: Stepper %s moving to %ld",
+                 id.c_str(), targetPos);
+        client->text(buffer);
       } else {
-        client->text("ERROR: Missing 'value' for move command");
+        client->text(F("ERROR: Missing 'value' for move command"));
       }
     } else if (strcmp(command, "step") == 0) {
       if (doc.containsKey("value")) {
@@ -556,21 +559,26 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
           stepper->stepper->move(steps);
           stepper->targetPosition = newPos;
         }
-        client->text("OK: Stepper " + id + " stepping " + String(steps) +
-                     " to " + String(newPos));
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld to %ld",
+                 id.c_str(), steps, newPos);
+        client->text(buffer);
       } else {
-        client->text("ERROR: Missing 'value' for step command");
+        client->text(F("ERROR: Missing 'value' for step command"));
       }
     } else if (strcmp(command, "home") == 0) {
       long homePos = (stepper->minPosition + stepper->maxPosition) / 2;
       stepper->stepper->moveTo(homePos);
       stepper->targetPosition = homePos;
-      client->text("OK: Stepper " + id + " homing to " + String(homePos));
+      char buffer[100];
+      snprintf(buffer, sizeof(buffer), "OK: Stepper %s homing to %ld",
+               id.c_str(), homePos);
+      client->text(buffer);
     } else if (strcmp(command, "stop") == 0) {
       stepper->stepper->forceStop();
-      client->text("OK: Stepper " + id + " emergency stop");
+      client->text(String(F("OK: Stepper ")) + id + F(" emergency stop"));
     } else {
-      client->text("ERROR: Unknown stepper command");
+      client->text(F("ERROR: Unknown stepper command"));
     }
   } else if (strcmp(action, "remove") == 0) {
     auto it =
@@ -583,11 +591,11 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         // own stepper objects
       }
       configuredSteppers.erase(it, configuredSteppers.end());
-      client->text("OK: Stepper removed: " + id);
+      client->text(String(F("OK: Stepper removed: ")) + id);
     } else {
-      client->text("ERROR: Stepper not found for removal: " + id);
+      client->text(String(F("ERROR: Stepper not found for removal: ")) + id);
     }
   } else {
-    client->text("ERROR: Unknown stepper action");
+    client->text(F("ERROR: Unknown stepper action"));
   }
 }

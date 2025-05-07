@@ -10,17 +10,17 @@ unsigned long lastIpPrintTime = 0;
 
 // Initialize WiFi connection
 void initWiFi() {
-  Serial.print("Connecting to WiFi");
+  Serial.print(F("Connecting to WiFi"));
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    Serial.print(F("."));
   }
 
-  Serial.print("\nConnected to ");
+  Serial.print(F("\nConnected to "));
   Serial.println(ssid);
-  Serial.print("IP_READY:");
+  Serial.print(F("IP_READY:"));
   Serial.println(WiFi.localIP());
 
   ipPrintStopTime = millis() + ipPrintDuration;
@@ -29,7 +29,7 @@ void initWiFi() {
 
 // Print IP address information
 void printIPAddress() {
-  Serial.print("IP_READY:");
+  Serial.print(F("IP_READY:"));
   Serial.println(WiFi.localIP());
 }
 
@@ -46,7 +46,7 @@ void updateWiFiStatus() {
 
   // Check if WiFi is still connected, attempt to reconnect if needed
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi connection lost. Reconnecting...");
+    Serial.println(F("WiFi connection lost. Reconnecting..."));
     WiFi.disconnect();
     WiFi.begin(ssid, password);
   }

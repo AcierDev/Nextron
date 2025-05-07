@@ -16,10 +16,10 @@ long clampPosition(StepperConfig *stepper, long position) {
 // Send JSON error message for when a stepper is not found
 void sendStepperNotFoundError(AsyncWebSocketClient *client, const String &id) {
   StaticJsonDocument<128> response;
-  response["status"] = "ERROR";
-  response["message"] = "Stepper not found or not initialized";
+  response["status"] = F("ERROR");
+  response["message"] = F("Stepper not found or not initialized");
   response["id"] = id;
-  response["componentGroup"] = "steppers";
+  response["componentGroup"] = F("steppers");
 
   String jsonResponse;
   serializeJson(response, jsonResponse);
@@ -43,7 +43,7 @@ void updateStepperPositions() {
           StaticJsonDocument<128> updateDoc;
           updateDoc["id"] = stepperConfig.id;
           updateDoc["position"] = currentPos;
-          updateDoc["componentGroup"] = "steppers";
+          updateDoc["componentGroup"] = F("steppers");
 
           String output;
           serializeJson(updateDoc, output);
