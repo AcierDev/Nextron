@@ -54,6 +54,7 @@ export function NewComponentDialog({
     };
 
     onCreateComponent(componentData);
+    onOpenChange(false);
     resetForm();
   };
 

@@ -67,7 +67,7 @@ export default function IOPinCard({
   const [value, setValue] = useState(initialValue);
   const [autoRefresh, setAutoRefresh] = useState(false); // Default to false since we now use events
   const [pullMode, setPullMode] = useState<number>(0); // 0: none, 1: pullup, 2: pulldown
-  const [debounceMs, setDebounceMs] = useState<number>(50); // Default 50 = mild debouncing
+  const [debounceMs, setDebounceMs] = useState<number>(0); // Default 0 = no debouncing
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 

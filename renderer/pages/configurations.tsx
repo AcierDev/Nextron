@@ -41,6 +41,7 @@ import {
   CalendarClock,
   RotateCw,
   Info,
+  Copy,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
@@ -83,26 +84,61 @@ export default function ConfigurationsPage() {
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   // New Config Dialog
-  const [isNewConfigOpen, setIsNewConfigOpen] = useState(false);
+  const [isNewConfigOpenState, setIsNewConfigOpenState] = useState(false);
   const [newConfigName, setNewConfigName] = useState("");
   const [newConfigDescription, setNewConfigDescription] = useState("");
+
   // Rename Dialog
-  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
+  const [isRenameDialogOpenState, setIsRenameDialogOpenState] = useState(false);
   const [renamingConfigId, setRenamingConfigId] = useState<string | null>(null);
   const [renamingConfigCurrentName, setRenamingConfigCurrentName] =
     useState("");
   const [configNewName, setConfigNewName] = useState("");
+
   // Delete Dialog
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleteDialogOpenState, setIsDeleteDialogOpenState] = useState(false);
   const [deletingConfigId, setDeletingConfigId] = useState<string | null>(null);
   const [deletingConfigName, setDeletingConfigName] = useState("");
+
   // Generic processing state
   const [isProcessing, setIsProcessing] = useState(false);
-  // New state for description dialog
-  const [isDescriptionDialogOpen, setIsDescriptionDialogOpen] = useState(false);
+
+  // Description Dialog
+  const [isDescriptionDialogOpenState, setIsDescriptionDialogOpenState] =
+    useState(false);
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
   const [editingConfigName, setEditingConfigName] = useState("");
   const [configDescription, setConfigDescription] = useState("");
+
+  // New state to track duplicating config
+  const [isDuplicating, setIsDuplicating] = useState(false);
+  const [duplicatingConfigId, setDuplicatingConfigId] = useState<string | null>(
+    null
+  );
+
+  // Add state to control dropdown menus
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+
+  // Custom dialog setter functions to ensure dropdowns are closed
+  const setIsNewConfigOpen = (open: boolean) => {
+    setOpenDropdownId(null);
+    setIsNewConfigOpenState(open);
+  };
+
+  const setIsRenameDialogOpen = (open: boolean) => {
+    setOpenDropdownId(null);
+    setIsRenameDialogOpenState(open);
+  };
+
+  const setIsDeleteDialogOpen = (open: boolean) => {
+    setOpenDropdownId(null);
+    setIsDeleteDialogOpenState(open);
+  };
+
+  const setIsDescriptionDialogOpen = (open: boolean) => {
+    setOpenDropdownId(null);
+    setIsDescriptionDialogOpenState(open);
+  };
 
   useEffect(() => {
     const fetchConfigs = async () => {
@@ -136,13 +172,13 @@ export default function ConfigurationsPage() {
     if (infoMessage) {
       timer = setTimeout(() => setInfoMessage(null), 3000);
     }
-    if (isProcessing && errorMessage) {
+    if ((isProcessing || isDuplicating) && errorMessage) {
       setErrorMessage(null);
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [infoMessage, isProcessing, errorMessage]);
+  }, [infoMessage, isProcessing, isDuplicating, errorMessage]);
 
   const handleCreateConfig = async () => {
     const trimmedName = newConfigName.trim();
@@ -267,6 +303,7 @@ export default function ConfigurationsPage() {
 
   const handleLoadConfig = (id: string) => {
     if (isProcessing) return;
+    setOpenDropdownId(null);
     console.log(`[ConfigPage] Loading config: ${id}`);
     router.push(`/dashboard?config=${id}`);
   };
@@ -305,6 +342,48 @@ export default function ConfigurationsPage() {
       setErrorMessage(`Update failed: ${(error as Error).message}`);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Handle duplicating a configuration
+  const handleDuplicateConfig = async (configId: string) => {
+    if (!configId) return;
+
+    setIsDuplicating(true);
+    setDuplicatingConfigId(configId);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      console.log(`[ConfigPage] Duplicating config: ${configId}`);
+      const newConfig = await window.ipc.invoke("duplicate-config", configId);
+
+      if (!newConfig || !newConfig._id) {
+        throw new Error(
+          "Backend did not return a valid duplicated configuration."
+        );
+      }
+
+      setConfigurations((prev) =>
+        [
+          ...prev,
+          {
+            _id: newConfig._id,
+            name: newConfig.name,
+            description: newConfig.description,
+            updatedAt: newConfig.updatedAt,
+            hardware: newConfig.hardware,
+          },
+        ].sort((a, b) => a.name.localeCompare(b.name))
+      );
+
+      setInfoMessage(`Configuration '${newConfig.name}' created as a copy.`);
+    } catch (error) {
+      console.error("[ConfigPage] Failed to duplicate configuration:", error);
+      setErrorMessage(`Duplication failed: ${(error as Error).message}`);
+    } finally {
+      setIsDuplicating(false);
+      setDuplicatingConfigId(null);
     }
   };
 
@@ -361,7 +440,7 @@ export default function ConfigurationsPage() {
               setErrorMessage(null);
               setIsNewConfigOpen(true);
             }}
-            disabled={isProcessing}
+            disabled={isProcessing || isDuplicating}
           >
             <PlusCircle className="h-4 w-4" />
             New Configuration
@@ -408,7 +487,7 @@ export default function ConfigurationsPage() {
                 setErrorMessage(null);
                 setIsNewConfigOpen(true);
               }}
-              disabled={isProcessing}
+              disabled={isProcessing || isDuplicating}
               className="bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 rounded-lg shadow-md hover:shadow-lg transition-all"
             >
               <PlusCircle className="h-4 w-4 mr-2" />
@@ -441,13 +520,23 @@ export default function ConfigurationsPage() {
                       >
                         {config.name}
                       </h3>
-                      <DropdownMenu>
+                      <DropdownMenu
+                        open={openDropdownId === config._id}
+                        onOpenChange={(open) => {
+                          if (open) {
+                            setOpenDropdownId(config._id);
+                          } else {
+                            setOpenDropdownId(null);
+                          }
+                        }}
+                        modal={true}
+                      >
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon"
                             className="flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                            disabled={isProcessing}
+                            disabled={isProcessing || isDuplicating}
                           >
                             <MoreVertical className="h-4 w-4" />
                           </Button>
@@ -455,17 +544,19 @@ export default function ConfigurationsPage() {
                         <DropdownMenuContent
                           align="end"
                           className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-gray-200/50 dark:border-gray-700/50 rounded-lg shadow-lg"
+                          forceMount
                         >
                           <DropdownMenuItem
                             className="hover:bg-gray-100/80 dark:hover:bg-gray-700/80 cursor-pointer rounded-md transition-colors"
                             onClick={() => {
+                              setOpenDropdownId(null);
                               setEditingConfigId(config._id);
                               setEditingConfigName(config.name);
                               setConfigDescription(config.description || "");
                               setErrorMessage(null);
                               setIsDescriptionDialogOpen(true);
                             }}
-                            disabled={isProcessing}
+                            disabled={isProcessing || isDuplicating}
                           >
                             <Info className="h-4 w-4 mr-2" />
                             Edit Description
@@ -473,25 +564,48 @@ export default function ConfigurationsPage() {
                           <DropdownMenuItem
                             className="hover:bg-gray-100/80 dark:hover:bg-gray-700/80 cursor-pointer rounded-md transition-colors"
                             onClick={() => {
+                              setOpenDropdownId(null);
                               setRenamingConfigId(config._id);
                               setRenamingConfigCurrentName(config.name);
                               setConfigNewName(config.name);
                               setErrorMessage(null);
                               setIsRenameDialogOpen(true);
                             }}
-                            disabled={isProcessing}
+                            disabled={isProcessing || isDuplicating}
                           >
                             <Pencil className="h-4 w-4 mr-2" />
                             Rename
                           </DropdownMenuItem>
                           <DropdownMenuItem
+                            className="hover:bg-gray-100/80 dark:hover:bg-gray-700/80 cursor-pointer rounded-md transition-colors"
                             onClick={() => {
+                              setOpenDropdownId(null);
+                              handleDuplicateConfig(config._id);
+                            }}
+                            disabled={
+                              isProcessing ||
+                              isDuplicating ||
+                              duplicatingConfigId === config._id
+                            }
+                          >
+                            {duplicatingConfigId === config._id ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Copy className="h-4 w-4 mr-2" />
+                            )}
+                            {duplicatingConfigId === config._id
+                              ? "Duplicating..."
+                              : "Duplicate"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setOpenDropdownId(null);
                               setDeletingConfigId(config._id);
                               setDeletingConfigName(config.name);
                               setIsDeleteDialogOpen(true);
                             }}
                             className="text-red-600 focus:text-red-700 dark:text-red-400 dark:focus:text-red-500 hover:bg-red-50/80 dark:hover:bg-red-900/30 cursor-pointer rounded-md transition-colors"
-                            disabled={isProcessing}
+                            disabled={isProcessing || isDuplicating}
                           >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete
@@ -547,7 +661,7 @@ export default function ConfigurationsPage() {
                     <Button
                       className="w-full flex justify-between items-center bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 rounded-lg shadow-md hover:shadow-lg transition-all"
                       onClick={() => handleLoadConfig(config._id)}
-                      disabled={isProcessing}
+                      disabled={isProcessing || isDuplicating}
                     >
                       <span>Open Configuration</span>
                       <ChevronRight className="h-4 w-4" />
@@ -560,7 +674,7 @@ export default function ConfigurationsPage() {
         )}
       </div>
 
-      <Dialog open={isNewConfigOpen} onOpenChange={setIsNewConfigOpen}>
+      <Dialog open={isNewConfigOpenState} onOpenChange={setIsNewConfigOpen}>
         <DialogContent className="sm:max-w-[425px] bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-gray-200/50 dark:border-gray-700/50 rounded-xl shadow-lg">
           <DialogHeader>
             <DialogTitle className="text-gray-900 dark:text-white">
@@ -589,7 +703,7 @@ export default function ConfigurationsPage() {
                   )
                     handleCreateConfig();
                 }}
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               />
             </div>
 
@@ -606,7 +720,7 @@ export default function ConfigurationsPage() {
                 onChange={(e) => setNewConfigDescription(e.target.value)}
                 placeholder="Brief description of this configuration"
                 className="w-full h-20 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm border border-gray-300/50 dark:border-gray-600/50 text-gray-900 dark:text-white rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               />
             </div>
 
@@ -621,14 +735,14 @@ export default function ConfigurationsPage() {
               <Button
                 variant="outline"
                 className="text-gray-700 dark:text-gray-300 border-gray-300/50 dark:border-gray-600/50 hover:bg-gray-100/50 dark:hover:bg-gray-700/50 rounded-lg"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               >
                 Cancel
               </Button>
             </DialogClose>
             <Button
               onClick={handleCreateConfig}
-              disabled={!newConfigName.trim() || isProcessing}
+              disabled={!newConfigName.trim() || isProcessing || isDuplicating}
               className="bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 disabled:opacity-50 rounded-lg shadow-md"
             >
               {isProcessing ? (
@@ -641,7 +755,7 @@ export default function ConfigurationsPage() {
       </Dialog>
 
       <Dialog
-        open={isRenameDialogOpen}
+        open={isRenameDialogOpenState}
         onOpenChange={(open) => {
           setIsRenameDialogOpen(open);
           if (!open) {
@@ -675,7 +789,7 @@ export default function ConfigurationsPage() {
                   value={configNewName}
                   onChange={(e) => setConfigNewName(e.target.value)}
                   className="bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm border-gray-300/50 dark:border-gray-600/50 text-gray-900 dark:text-white rounded-lg focus-visible:ring-blue-500"
-                  disabled={isProcessing}
+                  disabled={isProcessing || isDuplicating}
                   onKeyDown={(e) => {
                     if (
                       e.key === "Enter" &&
@@ -699,7 +813,7 @@ export default function ConfigurationsPage() {
               <Button
                 variant="outline"
                 className="text-gray-700 dark:text-gray-300 border-gray-300/50 dark:border-gray-600/50 hover:bg-gray-100/50 dark:hover:bg-gray-700/50 rounded-lg"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               >
                 Cancel
               </Button>
@@ -709,6 +823,7 @@ export default function ConfigurationsPage() {
               onClick={handleRenameConfig}
               disabled={
                 isProcessing ||
+                isDuplicating ||
                 !configNewName.trim() ||
                 configNewName.trim() === renamingConfigCurrentName
               }
@@ -724,7 +839,7 @@ export default function ConfigurationsPage() {
       </Dialog>
 
       <AlertDialog
-        open={isDeleteDialogOpen}
+        open={isDeleteDialogOpenState}
         onOpenChange={setIsDeleteDialogOpen}
       >
         <AlertDialogContent className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-gray-200/50 dark:border-gray-700/50 rounded-xl shadow-lg">
@@ -746,7 +861,7 @@ export default function ConfigurationsPage() {
               <Button
                 variant="outline"
                 className="text-gray-700 dark:text-gray-300 border-gray-300/50 dark:border-gray-600/50 hover:bg-gray-100/50 dark:hover:bg-gray-700/50 rounded-lg"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               >
                 Cancel
               </Button>
@@ -759,7 +874,7 @@ export default function ConfigurationsPage() {
                   e.preventDefault();
                   handleDeleteConfig();
                 }}
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               >
                 {isProcessing ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -773,7 +888,7 @@ export default function ConfigurationsPage() {
 
       {/* Description Dialog */}
       <Dialog
-        open={isDescriptionDialogOpen}
+        open={isDescriptionDialogOpenState}
         onOpenChange={setIsDescriptionDialogOpen}
       >
         <DialogContent className="sm:max-w-[525px] bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-gray-200/50 dark:border-gray-700/50 rounded-xl shadow-lg">
@@ -799,7 +914,7 @@ export default function ConfigurationsPage() {
                 onChange={(e) => setConfigDescription(e.target.value)}
                 placeholder="Brief description of this configuration"
                 className="w-full h-24 bg-white/50 dark:bg-gray-700/50 backdrop-blur-sm border border-gray-300/50 dark:border-gray-600/50 text-gray-900 dark:text-white rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               />
             </div>
             {errorMessage && (
@@ -813,14 +928,14 @@ export default function ConfigurationsPage() {
               <Button
                 variant="outline"
                 className="text-gray-700 dark:text-gray-300 border-gray-300/50 dark:border-gray-600/50 hover:bg-gray-100/50 dark:hover:bg-gray-700/50 rounded-lg"
-                disabled={isProcessing}
+                disabled={isProcessing || isDuplicating}
               >
                 Cancel
               </Button>
             </DialogClose>
             <Button
               onClick={handleUpdateDescription}
-              disabled={isProcessing}
+              disabled={isProcessing || isDuplicating}
               className="bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 disabled:opacity-50 rounded-lg shadow-md"
             >
               {isProcessing ? (

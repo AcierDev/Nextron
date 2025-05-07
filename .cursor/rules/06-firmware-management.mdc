@@ -1,0 +1,25 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Firmware Management
+
+## Firmware Directory
+
+The [firmware/](mdc:firmware) directory contains microcontroller code for the Everwood CNC hardware:
+
+- [firmware/microcontroller/](mdc:firmware/microcontroller): Microcontroller firmware code
+- [firmware/platformio.ini](mdc:firmware/platformio.ini): PlatformIO configuration
+
+## Firmware Setup
+
+The firmware setup flow is handled in:
+- [renderer/pages/firmware-setup.tsx](mdc:renderer/pages/firmware-setup.tsx): UI for firmware management
+- [main/background.ts](mdc:main/background.ts): Contains handlers for firmware operations
+
+## Device Communication
+
+Device communication is managed through:
+- Serial port communication using SerialPort library
+- IPC handlers for communication between UI and device

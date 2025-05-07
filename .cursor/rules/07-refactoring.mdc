@@ -1,0 +1,44 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Component Organization Best Practices
+
+## File Size Guidelines
+
+Large files with many components are difficult to maintain, test, and understand. Follow these guidelines:
+
+- Split large components into smaller, focused components
+- Aim for files under 300-400 lines of code
+- Each file should have a single primary responsibility
+- Components that exceed 500 lines are candidates for refactoring
+
+## Examples from Codebase
+
+- [configurations.tsx](mdc:renderer/pages/configurations.tsx) exceeds 900 lines and should be refactored into:
+  - A main page component
+  - Separate dialog components (CreateConfig, RenameConfig, etc.)
+  - A ConfigCard component for the grid items
+
+- [dashboard.tsx](mdc:renderer/pages/dashboard.tsx) is over 1700 lines and should be split into:
+  - Connection management components
+  - Header/navigation components
+  - Motor list and state management
+
+## Best Practices
+
+1. **Single Responsibility**: Each component should do one thing well
+2. **Reusability**: Smaller components are more reusable
+3. **Testability**: Isolated components are easier to test
+4. **Readability**: Smaller files are easier to understand
+5. **Performance**: Fine-grained components enable better optimization
+
+## Implementation Strategy
+
+When refactoring large files:
+1. Identify logical groupings within the file
+2. Extract repeated patterns into shared components
+3. Move dialog/modal components to separate files
+4. Create component folders for related components
+5. Use index files to simplify imports

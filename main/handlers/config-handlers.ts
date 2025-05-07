@@ -329,6 +329,84 @@ async function handleUpdateDescription(
   }
 }
 
+// Handler for duplicating a config
+async function handleDuplicateConfig(
+  _event: Electron.IpcMainInvokeEvent,
+  configId: string
+) {
+  if (!isValidObjectId(configId)) {
+    throw new Error("Invalid Configuration ID format");
+  }
+
+  try {
+    const collection = await getConfigurationsCollection();
+
+    // Find the source configuration
+    const sourceConfig = await collection.findOne({
+      _id: new ObjectId(configId),
+    });
+    if (!sourceConfig) {
+      throw new Error("Source configuration not found");
+    }
+
+    // Create a copy with a new name
+    const newName = `${sourceConfig.name} (Copy)`;
+
+    // Check if the name already exists
+    const existingConfig = await collection.findOne({
+      name: { $regex: `^${newName}$`, $options: "i" },
+    });
+
+    // If name exists, append a number
+    let finalName = newName;
+    if (existingConfig) {
+      let counter = 1;
+      while (true) {
+        const nameWithCounter = `${newName} ${counter}`;
+        const exists = await collection.findOne({
+          name: { $regex: `^${nameWithCounter}$`, $options: "i" },
+        });
+        if (!exists) {
+          finalName = nameWithCounter;
+          break;
+        }
+        counter++;
+      }
+    }
+
+    // Create new config document (without _id)
+    const newConfig: Omit<SavedConfigDocument, "_id"> = {
+      name: finalName,
+      description: sourceConfig.description,
+      hardware: sourceConfig.hardware,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Insert the new configuration
+    const result = await collection.insertOne(newConfig as SavedConfigDocument);
+
+    // Fetch the inserted document to return it
+    const insertedDoc = await collection.findOne({ _id: result.insertedId });
+    if (!insertedDoc) {
+      throw new Error("Failed to retrieve the newly duplicated configuration.");
+    }
+
+    console.log(
+      `[Main:handleDuplicateConfig] Duplicated config '${sourceConfig.name}' to '${finalName}' with ID: ${result.insertedId}`
+    );
+
+    // Convert ObjectId before sending back
+    return { ...insertedDoc, _id: insertedDoc._id.toHexString() };
+  } catch (error: any) {
+    console.error(
+      `[Main:handleDuplicateConfig] Error duplicating config ID ${configId}:`,
+      error
+    );
+    throw new Error(`Error duplicating configuration: ${error.message}`);
+  }
+}
+
 // Updated setup function
 export function setupConfigHandlers() {
   ipcMain.handle("get-configs", handleGetConfigs);
@@ -338,4 +416,5 @@ export function setupConfigHandlers() {
   ipcMain.handle("delete-config", handleDeleteConfig);
   ipcMain.handle("rename-config", handleRenameConfig);
   ipcMain.handle("update-description", handleUpdateDescription);
+  ipcMain.handle("duplicate-config", handleDuplicateConfig);
 }

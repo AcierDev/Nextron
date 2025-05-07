@@ -50,6 +50,11 @@ interface ServoCardProps {
   onDuplicate: () => void;
   onEditPins: () => void;
   sendMessage: SendMessage; // Added sendMessage prop
+  initialPresets?: number[];
+  onSettingsChange?: (
+    id: string,
+    newSettings: { presets?: number[]; minAngle?: number; maxAngle?: number }
+  ) => void;
 }
 
 export default function ServoCardHybrid({
@@ -63,30 +68,30 @@ export default function ServoCardHybrid({
   onDuplicate,
   onEditPins,
   sendMessage, // Destructure sendMessage
+  initialPresets,
+  onSettingsChange,
 }: ServoCardProps) {
   // Removed internal angle state: const [angle, setAngle] = useState(initialAngle);
   const [minAngle, setMinAngle] = useState(initialMinAngle);
   const [maxAngle, setMaxAngle] = useState(initialMaxAngle);
-  const [targetAngle, setTargetAngle] = useState(90); // UI state for the input field
+  const [targetAngleInput, setTargetAngleInput] = useState<string>("90"); // UI state for the input field, now string
+
+  // States for string representation of min/max angle inputs
+  const [minAngleInput, setMinAngleInput] = useState<string>(
+    initialMinAngle.toString()
+  );
+  const [maxAngleInput, setMaxAngleInput] = useState<string>(
+    initialMaxAngle.toString()
+  );
 
   // Load presets from localStorage if available, else use defaults
-  const [presets, setPresets] = useState<number[]>(() => {
-    // Try to load saved presets for this specific servo
-    try {
-      const savedPresets = localStorage.getItem(`servo-presets-${id}`);
-      if (savedPresets) {
-        return JSON.parse(savedPresets);
-      }
-    } catch (error) {
-      console.error("Error loading saved presets:", error);
-    }
-    // Default presets if none saved
-    return [0, 45, 90, 135, 180];
-  });
-  const [newPreset, setNewPreset] = useState(0);
+  const [presets, setPresets] = useState<number[]>(
+    initialPresets ?? [0, 45, 90, 135, 180]
+  );
+  const [newPresetInput, setNewPresetInput] = useState<string>("0"); // For the input field
   const [editingPreset, setEditingPreset] = useState<{
     index: number;
-    value: number;
+    value: string; // Store edit value as string
   } | null>(null);
 
   // For canvas visualization
@@ -219,70 +224,103 @@ export default function ServoCardHybrid({
   };
 
   const addPreset = () => {
+    const numericPreset = parseInt(newPresetInput, 10);
     if (
-      newPreset >= minAngle &&
-      newPreset <= maxAngle &&
-      !presets.includes(newPreset)
+      !isNaN(numericPreset) &&
+      numericPreset >= minAngle &&
+      numericPreset <= maxAngle &&
+      !presets.includes(numericPreset)
     ) {
-      setPresets([...presets, newPreset].sort((a, b) => a - b));
-      setNewPreset(0);
+      const updatedPresets = [...presets, numericPreset].sort((a, b) => a - b);
+      setPresets(updatedPresets);
+      if (onSettingsChange) {
+        onSettingsChange(id, { presets: updatedPresets });
+      }
+      setNewPresetInput("0"); // Reset input
     }
   };
 
   const removePreset = (presetToRemove: number) => {
-    setPresets(presets.filter((preset) => preset !== presetToRemove));
+    const updatedPresets = presets.filter(
+      (preset) => preset !== presetToRemove
+    );
+    setPresets(updatedPresets);
+    if (onSettingsChange) {
+      onSettingsChange(id, { presets: updatedPresets });
+    }
   };
 
   const updatePreset = () => {
-    if (
-      editingPreset &&
-      editingPreset.value >= minAngle &&
-      editingPreset.value <= maxAngle
-    ) {
-      const newPresets = [...presets];
-      newPresets[editingPreset.index] = editingPreset.value;
-      setPresets(newPresets.sort((a, b) => a - b));
-      setEditingPreset(null);
+    if (editingPreset) {
+      const numericValue = parseInt(editingPreset.value, 10);
+      if (
+        !isNaN(numericValue) &&
+        numericValue >= minAngle &&
+        numericValue <= maxAngle
+      ) {
+        const newPresetsArray = [...presets];
+        newPresetsArray[editingPreset.index] = numericValue;
+        newPresetsArray.sort((a, b) => a - b);
+        setPresets(newPresetsArray);
+        if (onSettingsChange) {
+          onSettingsChange(id, { presets: newPresetsArray });
+        }
+        setEditingPreset(null);
+      }
     }
   };
 
   // Function to handle changes to min/max angle limits (local state only for now)
   // To make persistent, these would need to trigger an update in hardwareConfig
   // and potentially send a new configure message via sendMessage
-  const handleMinAngleChange = (value: number) => {
-    const newMin = Math.max(0, Math.min(value, maxAngle - 1)); // Ensure min < max and >= 0
-    setMinAngle(newMin);
+  const handleMinAngleInputChange = (valueStr: string) => {
+    setMinAngleInput(valueStr);
+    const newMin = parseInt(valueStr, 10);
+    if (!isNaN(newMin)) {
+      const validatedMin = Math.max(0, Math.min(newMin, maxAngle - 1)); // Ensure min < max and >= 0
+      setMinAngle(validatedMin);
 
-    // Send update to the server
-    sendMessage({
-      action: "configure",
-      componentGroup: "servos",
-      config: {
-        id,
-        name,
-        pin: pins.control,
-        minAngle: newMin,
-        maxAngle,
-      },
-    });
+      // Send update to the server
+      sendMessage({
+        action: "configure",
+        componentGroup: "servos",
+        config: {
+          id,
+          name,
+          pin: pins.control,
+          minAngle: validatedMin,
+          maxAngle,
+        },
+      });
+      if (onSettingsChange) {
+        onSettingsChange(id, { minAngle: validatedMin });
+      }
+    }
   };
 
-  const handleMaxAngleChange = (value: number) => {
-    const newMax = Math.min(180, Math.max(value, minAngle + 1)); // Ensure max > min and <= 180
-    setMaxAngle(newMax);
+  const handleMaxAngleInputChange = (valueStr: string) => {
+    setMaxAngleInput(valueStr);
+    const newMax = parseInt(valueStr, 10);
+    if (!isNaN(newMax)) {
+      const validatedMax = Math.min(180, Math.max(newMax, minAngle + 1)); // Ensure max > min and <= 180
+      setMaxAngle(validatedMax);
 
-    // Send update to the server
-    sendMessage({
-      action: "configure",
-      componentGroup: "servos",
-      config: {
-        id,
-        name,
-        pin: pins.control,
-        minAngle,
-        maxAngle: newMax,
-      },
-    });
+      // Send update to the server
+      sendMessage({
+        action: "configure",
+        componentGroup: "servos",
+        config: {
+          id,
+          name,
+          pin: pins.control,
+          minAngle,
+          maxAngle: validatedMax,
+        },
+      });
+      if (onSettingsChange) {
+        onSettingsChange(id, { maxAngle: validatedMax });
+      }
+    }
   };
 
   // Add an effect to listen for WebSocket events
@@ -325,16 +363,18 @@ export default function ServoCardHybrid({
   useEffect(() => {
     setMinAngle(initialMinAngle);
     setMaxAngle(initialMaxAngle);
+    setMinAngleInput(initialMinAngle.toString());
+    setMaxAngleInput(initialMaxAngle.toString());
   }, [initialMinAngle, initialMaxAngle]);
 
-  // Save presets to localStorage whenever they change
+  // Update string inputs if numeric states change (e.g. due to validation logic)
   useEffect(() => {
-    try {
-      localStorage.setItem(`servo-presets-${id}`, JSON.stringify(presets));
-    } catch (error) {
-      console.error("Error saving presets:", error);
-    }
-  }, [presets, id]);
+    setMinAngleInput(minAngle.toString());
+  }, [minAngle]);
+
+  useEffect(() => {
+    setMaxAngleInput(maxAngle.toString());
+  }, [maxAngle]);
 
   return (
     <Card className="shadow-md">
@@ -454,13 +494,23 @@ export default function ServoCardHybrid({
               <div className="flex space-x-2 mt-1">
                 <Input
                   id={`${id}-target-angle`}
-                  type="number"
-                  value={targetAngle}
-                  onChange={(e) => setTargetAngle(Number(e.target.value))}
-                  min={minAngle}
-                  max={maxAngle}
+                  type="text" // Use text to allow empty string
+                  value={targetAngleInput}
+                  onChange={(e) => setTargetAngleInput(e.target.value)}
+                  placeholder="Angle"
+                  // min={minAngle} // HTML5 min/max not as critical with text type + manual parsing
+                  // max={maxAngle}
                 />
-                <Button onClick={() => moveToAngle(targetAngle)}>Go</Button>
+                <Button
+                  onClick={() => {
+                    const numericAngle = parseInt(targetAngleInput, 10);
+                    if (!isNaN(numericAngle)) {
+                      moveToAngle(numericAngle);
+                    }
+                  }}
+                >
+                  Go
+                </Button>
               </div>
             </div>
           </TabsContent>
@@ -471,20 +521,22 @@ export default function ServoCardHybrid({
                 <Label htmlFor={`${id}-min-angle`}>Minimum Angle</Label>
                 <Input
                   id={`${id}-min-angle`}
-                  type="number"
-                  value={minAngle}
-                  onChange={(e) => handleMinAngleChange(Number(e.target.value))}
+                  type="text" // Use text to allow empty string
+                  value={minAngleInput}
+                  onChange={(e) => handleMinAngleInputChange(e.target.value)}
                   className="mt-1"
+                  placeholder="Min"
                 />
               </div>
               <div>
                 <Label htmlFor={`${id}-max-angle`}>Maximum Angle</Label>
                 <Input
                   id={`${id}-max-angle`}
-                  type="number"
-                  value={maxAngle}
-                  onChange={(e) => handleMaxAngleChange(Number(e.target.value))}
+                  type="text" // Use text to allow empty string
+                  value={maxAngleInput}
+                  onChange={(e) => handleMaxAngleInputChange(e.target.value)}
                   className="mt-1"
+                  placeholder="Max"
                 />
               </div>
             </div>
@@ -520,12 +572,13 @@ export default function ServoCardHybrid({
                             </Label>
                             <Input
                               id="edit-preset"
-                              type="number"
-                              value={editingPreset?.value ?? preset}
+                              type="number" // Keeping as number for native browser handling if preferred, or change to text
+                              value={editingPreset?.value ?? preset.toString()} // preset is number, so toString()
                               onChange={(e) =>
+                                editingPreset &&
                                 setEditingPreset({
-                                  index,
-                                  value: Number(e.target.value),
+                                  ...editingPreset,
+                                  value: e.target.value, // Store raw string
                                 })
                               }
                               min={minAngle}
@@ -557,11 +610,11 @@ export default function ServoCardHybrid({
 
               <div className="flex gap-2 mt-2">
                 <Input
-                  type="number"
-                  value={newPreset}
-                  onChange={(e) => setNewPreset(Number(e.target.value))}
-                  min={minAngle}
-                  max={maxAngle}
+                  type="text" // Use text to allow empty string
+                  value={newPresetInput}
+                  onChange={(e) => setNewPresetInput(e.target.value)}
+                  // min={minAngle} // HTML5 min/max not as critical with text type + manual parsing
+                  // max={maxAngle}
                   placeholder="New preset angle"
                 />
                 <Button variant="outline" size="icon" onClick={addPreset}>

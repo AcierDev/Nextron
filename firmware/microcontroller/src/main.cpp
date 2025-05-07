@@ -52,11 +52,11 @@ struct StepperConfig {
   FastAccelStepper *stepper = nullptr;
   long currentPosition = 0;
   long targetPosition = 0;
-  float maxSpeed = 5000.0;      // Default higher max speed
-  float acceleration = 2000.0;  // Default higher acceleration
-  long minPosition = -50000;    // Min position limit
-  long maxPosition = 50000;     // Max position limit
-  float stepsPerInch = 200.0;   // For unit conversion
+  float maxSpeed = 100000.0;     // Increased default max speed
+  float acceleration = 50000.0;  // Increased default acceleration
+  long minPosition = -50000;     // Min position limit
+  long maxPosition = 50000;      // Max position limit
+  float stepsPerInch = 200.0;    // For unit conversion
   unsigned long lastPositionReportTime = 0;
 };
 
@@ -723,11 +723,8 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                 // Set the speed in Hz (steps per second)
                 stepper->stepper->setSpeedInHz(speed);
 
-                // If speed is very high, make sure auto-enable is off
-                if (speed > 5000) {
-                  stepper->stepper->setAutoEnable(false);
-                }
-
+                // Remove auto-enable check since we now support much higher
+                // speeds
                 Serial.printf("Stepper %s: Set speed to %.2f Hz\n", id.c_str(),
                               speed);
               }

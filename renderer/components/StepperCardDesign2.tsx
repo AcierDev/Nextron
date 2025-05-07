@@ -54,6 +54,22 @@ interface StepperCardProps {
   onDuplicate: () => void;
   onEditPins: () => void;
   sendMessage: SendMessage; // Added sendMessage prop
+  onSettingsChange?: (
+    id: string,
+    newSettings: {
+      minPosition?: number;
+      maxPosition?: number;
+      stepsPerInch?: number;
+      jogUnit?: "steps" | "inches";
+      jogAmount?: number; // Corresponds to steps if jogUnit is steps
+      jogAmountInches?: number; // Corresponds to inches if jogUnit is inches
+      speed?: number;
+      acceleration?: number;
+    }
+  ) => void;
+  initialJogUnit?: "steps" | "inches";
+  initialJogAmount?: number;
+  initialJogAmountInches?: number;
 }
 
 export default function StepperCardDesign2({
@@ -70,6 +86,10 @@ export default function StepperCardDesign2({
   onDuplicate,
   onEditPins,
   sendMessage, // Destructure sendMessage
+  onSettingsChange,
+  initialJogUnit,
+  initialJogAmount,
+  initialJogAmountInches,
 }: StepperCardProps) {
   // Settings State (can be adjusted by user)
   const [speed, setSpeed] = useState(initialSpeed);
@@ -78,37 +98,37 @@ export default function StepperCardDesign2({
   const [minPosition, setMinPosition] = useState(initialMinPosition);
   const [maxPosition, setMaxPosition] = useState(initialMaxPosition);
 
+  // String states for inputs
+  const [stepsPerInchInput, setStepsPerInchInput] = useState<string>(
+    initialStepsPerInch.toString()
+  );
+  const [minPositionInput, setMinPositionInput] = useState<string>(
+    initialMinPosition.toString()
+  );
+  const [maxPositionInput, setMaxPositionInput] = useState<string>(
+    initialMaxPosition.toString()
+  );
+
   // Target State (Updated for combined input)
   const [targetMoveValue, setTargetMoveValue] = useState<string>("0"); // Store input as string
   const [moveToUnit, setMoveToUnit] = useState<"steps" | "inches">("steps"); // State for unit selection
 
-  // Jogging State - Load from localStorage if available
-  const [jogUnit, setJogUnit] = useState<"steps" | "inches">(() => {
-    try {
-      const saved = localStorage.getItem(`stepper-jogUnit-${id}`);
-      return saved === "inches" ? "inches" : "steps";
-    } catch (error) {
-      return "steps";
-    }
-  });
+  // Jogging State - Initialize from props or defaults
+  const [jogUnit, setJogUnit] = useState<"steps" | "inches">(
+    initialJogUnit ?? "steps"
+  );
 
-  const [jogAmount, setJogAmount] = useState(() => {
-    try {
-      const saved = localStorage.getItem(`stepper-jogAmount-${id}`);
-      return saved ? parseInt(saved, 10) : 200;
-    } catch (error) {
-      return 200;
-    }
-  });
+  const [jogAmount, setJogAmount] = useState(initialJogAmount ?? 200); // Numeric state for steps
+  const [jogAmountInput, setJogAmountInput] = useState<string>(
+    (initialJogAmount ?? 200).toString()
+  );
 
-  const [jogAmountInches, setJogAmountInches] = useState(() => {
-    try {
-      const saved = localStorage.getItem(`stepper-jogAmountInches-${id}`);
-      return saved ? parseFloat(saved) : 0.1;
-    } catch (error) {
-      return 0.1;
-    }
-  });
+  const [jogAmountInches, setJogAmountInches] = useState(
+    initialJogAmountInches ?? 0.1
+  ); // Numeric state for inches
+  const [jogAmountInchesInput, setJogAmountInchesInput] = useState<string>(
+    (initialJogAmountInches ?? 0.1).toString()
+  );
 
   // Continuous Movement State
   const [isMovingLeft, setIsMovingLeft] = useState(false);
@@ -122,12 +142,27 @@ export default function StepperCardDesign2({
     setStepsPerInch(initialStepsPerInch);
     setMinPosition(initialMinPosition);
     setMaxPosition(initialMaxPosition);
+
+    // Sync string inputs with initial prop-derived values
+    setStepsPerInchInput(initialStepsPerInch.toString());
+    setMinPositionInput(initialMinPosition.toString());
+    setMaxPositionInput(initialMaxPosition.toString());
+
+    // Sync jog settings from props
+    setJogUnit(initialJogUnit ?? "steps");
+    setJogAmount(initialJogAmount ?? 200);
+    setJogAmountInput((initialJogAmount ?? 200).toString());
+    setJogAmountInches(initialJogAmountInches ?? 0.1);
+    setJogAmountInchesInput((initialJogAmountInches ?? 0.1).toString());
   }, [
     initialSpeed,
     initialAcceleration,
     initialStepsPerInch,
     initialMinPosition,
     initialMaxPosition,
+    initialJogUnit,
+    initialJogAmount,
+    initialJogAmountInches,
   ]);
 
   // Effect to send min/max/stepsPerInch changes back to the server
@@ -152,6 +187,35 @@ export default function StepperCardDesign2({
     const timeoutId = setTimeout(handleConfigUpdate, 500);
     return () => clearTimeout(timeoutId);
   }, [minPosition, maxPosition, stepsPerInch, id, sendMessage]);
+
+  // Effects to sync string inputs if primary numeric state changes
+  useEffect(() => {
+    setStepsPerInchInput(stepsPerInch.toString());
+  }, [stepsPerInch]);
+
+  useEffect(() => {
+    setMinPositionInput(minPosition.toString());
+  }, [minPosition]);
+
+  useEffect(() => {
+    setMaxPositionInput(maxPosition.toString());
+  }, [maxPosition]);
+
+  useEffect(() => {
+    // Update input string if numeric state changes (e.g. from initial load or other logic)
+    // Ensure not to cause infinite loops if typing fast while also saving to localStorage
+    const currentNumStr = jogAmount.toString();
+    if (jogAmountInput !== currentNumStr) {
+      setJogAmountInput(currentNumStr);
+    }
+  }, [jogAmount]); // Removed jogAmountInput from dependency array if it was there before
+
+  useEffect(() => {
+    const currentNumStr = jogAmountInches.toString();
+    if (jogAmountInchesInput !== currentNumStr) {
+      setJogAmountInchesInput(currentNumStr);
+    }
+  }, [jogAmountInches]); // Removed jogAmountInchesInput from dependency array
 
   // Effect to handle continuous movement via repeated step commands
   useEffect(() => {
@@ -188,23 +252,6 @@ export default function StepperCardDesign2({
       }
     };
   }, [isMovingLeft, isMovingRight, id, sendMessage]); // Rerun if moving state changes
-
-  // Save jog settings to localStorage when they change
-  useEffect(() => {
-    try {
-      localStorage.setItem(`stepper-jogUnit-${id}`, jogUnit);
-      localStorage.setItem(`stepper-jogAmount-${id}`, jogAmount.toString());
-      localStorage.setItem(
-        `stepper-jogAmountInches-${id}`,
-        jogAmountInches.toString()
-      );
-    } catch (error) {
-      console.error(
-        `[StepperCard ${id}] Error saving jog settings to localStorage:`,
-        error
-      );
-    }
-  }, [id, jogUnit, jogAmount, jogAmountInches]);
 
   const moveToPosition = (pos: number) => {
     let limitedPos = Math.round(pos); // Ensure integer steps
@@ -257,15 +304,21 @@ export default function StepperCardDesign2({
     });
   };
 
-  // Update speed/accel state and send update
-  const handleSpeedChange = (newSpeed: number) => {
-    setSpeed(newSpeed);
-    sendSpeedAccelUpdate();
+  // Update speed/accel state and send update to device, also notify dashboard
+  const handleSpeedChangeCommit = (newSpeedValue: number) => {
+    // setSpeed is already called by onValueChange for slider UI responsiveness
+    sendSpeedAccelUpdate(); // Sends to device with current speed state
+    if (onSettingsChange) {
+      onSettingsChange(id, { speed: newSpeedValue }); // Updates dashboard config
+    }
   };
 
-  const handleAccelChange = (newAccel: number) => {
-    setAcceleration(newAccel);
-    sendSpeedAccelUpdate();
+  const handleAccelChangeCommit = (newAccelValue: number) => {
+    // setAcceleration is already called by onValueChange for slider UI responsiveness
+    sendSpeedAccelUpdate(); // Sends to device with current acceleration state
+    if (onSettingsChange) {
+      onSettingsChange(id, { acceleration: newAccelValue }); // Updates dashboard config
+    }
   };
 
   const handleJog = (direction: "left" | "right") => {
@@ -513,10 +566,10 @@ export default function StepperCardDesign2({
                 id={`${id}-speed`}
                 value={[speed]}
                 min={100}
-                max={20000}
+                max={100000}
                 step={100}
-                onValueChange={(value) => setSpeed(value[0])} // Update local state for slider smoothness
-                onValueCommit={(value) => handleSpeedChange(value[0])} // Send command on release
+                onValueChange={(value) => setSpeed(value[0])} // Live update for slider UI
+                onValueCommit={(value) => handleSpeedChangeCommit(value[0])} // Corrected: Use new handler name
                 className="mt-2"
               />
             </div>
@@ -529,10 +582,10 @@ export default function StepperCardDesign2({
                 id={`${id}-accel`}
                 value={[acceleration]}
                 min={100}
-                max={10000}
+                max={50000}
                 step={100}
-                onValueChange={(value) => setAcceleration(value[0])} // Update local state
-                onValueCommit={(value) => handleAccelChange(value[0])} // Send command on release
+                onValueChange={(value) => setAcceleration(value[0])} // Live update for slider UI
+                onValueCommit={(value) => handleAccelChangeCommit(value[0])} // Corrected: Use new handler name
                 className="mt-2"
               />
             </div>
@@ -544,29 +597,23 @@ export default function StepperCardDesign2({
               <div className="flex space-x-2">
                 <Input
                   id={`${id}-steps-per-inch`}
-                  type="number"
-                  value={stepsPerInch}
-                  onChange={(e) => setStepsPerInch(Number(e.target.value))}
-                  className="mt-1 flex-1"
-                />
-                <Button
-                  onClick={() => {
-                    console.log(
-                      `[StepperCard ${id}] Updating steps per inch: ${stepsPerInch}`
-                    );
-                    sendMessage({
-                      action: "control",
-                      componentGroup: "steppers",
-                      id,
-                      command: "setParams",
-                      stepsPerInch: stepsPerInch,
-                    });
+                  type="text"
+                  value={stepsPerInchInput}
+                  onChange={(e) => {
+                    const valStr = e.target.value;
+                    setStepsPerInchInput(valStr);
+                    if (valStr === "") return; // Allow clearing, numeric state holds last valid
+                    const numericSPI = Number(valStr);
+                    if (!isNaN(numericSPI)) {
+                      setStepsPerInch(numericSPI);
+                      if (onSettingsChange) {
+                        onSettingsChange(id, { stepsPerInch: numericSPI });
+                      }
+                    }
                   }}
-                  size="sm"
-                  className="mt-1"
-                >
-                  Save
-                </Button>
+                  className="mt-1 flex-1"
+                  placeholder="e.g. 2000"
+                />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -577,10 +624,23 @@ export default function StepperCardDesign2({
                 <div className="flex space-x-2">
                   <Input
                     id={`${id}-min-pos`}
-                    type="number"
-                    value={minPosition}
-                    onChange={(e) => setMinPosition(Number(e.target.value))}
+                    type="text"
+                    value={minPositionInput}
+                    onChange={(e) => {
+                      const valStr = e.target.value;
+                      setMinPositionInput(valStr);
+                      if (valStr === "") return;
+                      const numVal = Number(valStr);
+                      if (!isNaN(numVal)) {
+                        // Add validation if needed, e.g. numVal < maxPosition
+                        setMinPosition(numVal);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, { minPosition: numVal });
+                        }
+                      }
+                    }}
                     className="mt-1 flex-1"
+                    placeholder="Min steps"
                   />
                 </div>
               </div>
@@ -591,45 +651,39 @@ export default function StepperCardDesign2({
                 <div className="flex space-x-2">
                   <Input
                     id={`${id}-max-pos`}
-                    type="number"
-                    value={maxPosition}
-                    onChange={(e) => setMaxPosition(Number(e.target.value))}
+                    type="text"
+                    value={maxPositionInput}
+                    onChange={(e) => {
+                      const valStr = e.target.value;
+                      setMaxPositionInput(valStr);
+                      if (valStr === "") return;
+                      const numVal = Number(valStr);
+                      if (!isNaN(numVal)) {
+                        // Add validation if needed, e.g. numVal > minPosition
+                        setMaxPosition(numVal);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, { maxPosition: numVal });
+                        }
+                      }
+                    }}
                     className="mt-1 flex-1"
+                    placeholder="Max steps"
                   />
                 </div>
               </div>
             </div>
-            <Button
-              onClick={() => {
-                console.log(
-                  `[StepperCard ${id}] Updating min/max position: ${minPosition}/${maxPosition}`
-                );
-                sendMessage({
-                  action: "control",
-                  componentGroup: "steppers",
-                  id,
-                  command: "setParams",
-                  minPosition: minPosition,
-                  maxPosition: maxPosition,
-                  stepsPerInch: stepsPerInch,
-                  speed: speed,
-                  acceleration: acceleration,
-                });
-              }}
-              variant="outline"
-              className="w-full"
-            >
-              Save All Settings
-            </Button>
             <div className="border rounded-md p-3 space-y-3">
               <Label className="font-medium">Jog Button Settings</Label>
               <div>
                 <Label htmlFor={`${id}-jog-unit`}>Jog Units</Label>
                 <Select
                   value={jogUnit}
-                  onValueChange={(value: "steps" | "inches") =>
-                    setJogUnit(value)
-                  }
+                  onValueChange={(value: "steps" | "inches") => {
+                    setJogUnit(value);
+                    if (onSettingsChange) {
+                      onSettingsChange(id, { jogUnit: value });
+                    }
+                  }}
                 >
                   <SelectTrigger id={`${id}-jog-unit`} className="mt-1">
                     <SelectValue placeholder="Select unit" />
@@ -645,10 +699,23 @@ export default function StepperCardDesign2({
                   <Label htmlFor={`${id}-jog-amount`}>Jog Amount (steps)</Label>
                   <Input
                     id={`${id}-jog-amount`}
-                    type="number"
-                    value={jogAmount}
-                    onChange={(e) => setJogAmount(Number(e.target.value))}
+                    type="text"
+                    value={jogAmountInput}
+                    onChange={(e) => {
+                      setJogAmountInput(e.target.value);
+                      const numVal = Number(e.target.value);
+                      if (!isNaN(numVal)) {
+                        setJogAmount(numVal);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, { jogAmount: numVal });
+                        }
+                      } else if (e.target.value === "") {
+                        // If input is cleared, decide what jogAmount (number) should be.
+                        // For now, it remains unchanged, or you could set setJogAmount(0) or similar.
+                      }
+                    }}
                     className="mt-1"
+                    placeholder="e.g. 200"
                   />
                 </div>
               ) : (
@@ -658,11 +725,23 @@ export default function StepperCardDesign2({
                   </Label>
                   <Input
                     id={`${id}-jog-amount-inches`}
-                    type="number"
-                    value={jogAmountInches}
-                    onChange={(e) => setJogAmountInches(Number(e.target.value))}
+                    type="text"
+                    value={jogAmountInchesInput}
+                    onChange={(e) => {
+                      setJogAmountInchesInput(e.target.value);
+                      const numVal = parseFloat(e.target.value);
+                      if (!isNaN(numVal)) {
+                        setJogAmountInches(numVal);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, { jogAmountInches: numVal });
+                        }
+                      } else if (e.target.value === "") {
+                        // If input is cleared, decide what jogAmountInches (number) should be.
+                      }
+                    }}
                     step="0.1"
                     className="mt-1"
+                    placeholder="e.g. 0.1"
                   />
                 </div>
               )}

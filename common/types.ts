@@ -11,9 +11,16 @@ export interface ConfiguredComponent {
   // Servo specific
   minAngle?: number;
   maxAngle?: number;
+  presets?: number[]; // Added for servo presets
   // Stepper specific
   maxSpeed?: number;
   acceleration?: number;
+  stepsPerInch?: number; // Added
+  minPosition?: number; // Added
+  maxPosition?: number; // Added
+  jogUnit?: "steps" | "inches"; // Added
+  jogAmount?: number; // Added - for steps
+  jogAmountInches?: number; // Added - for inches
 }
 
 /**

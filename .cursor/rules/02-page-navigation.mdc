@@ -1,0 +1,18 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Application Pages
+
+## Main Pages
+
+- [renderer/pages/home.tsx](mdc:renderer/pages/home.tsx): Landing page
+- [renderer/pages/dashboard.tsx](mdc:renderer/pages/dashboard.tsx): Main control dashboard
+- [renderer/pages/configurations.tsx](mdc:renderer/pages/configurations.tsx): Settings and configurations
+- [renderer/pages/firmware-setup.tsx](mdc:renderer/pages/firmware-setup.tsx): Firmware management
+
+## Page Structure
+
+All pages use the Next.js framework. The application entry point is:
+- [renderer/pages/_app.tsx](mdc:renderer/pages/_app.tsx): Root component that wraps all pages

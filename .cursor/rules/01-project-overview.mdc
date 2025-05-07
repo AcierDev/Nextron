@@ -1,0 +1,27 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Project Overview
+
+This is a Nextron application (Next.js + Electron) for controlling Everwood CNC hardware.
+
+## Project Structure
+
+- **main/**: Contains Electron main process code
+  - [main/background.ts](mdc:main/background.ts): Main entry point for Electron
+  - [main/preload.ts](mdc:main/preload.ts): Preload script for exposing APIs to renderer
+
+- **renderer/**: Contains Next.js frontend application
+  - [renderer/pages/](mdc:renderer/pages): Next.js pages/routes
+  - [renderer/components/](mdc:renderer/components): Reusable React components
+  - [renderer/lib/](mdc:renderer/lib): Utility functions and libraries
+
+- **common/**: Shared code between main and renderer
+
+- **firmware/**: Code related to device firmware
+
+## Application Configuration
+- [package.json](mdc:package.json): Project dependencies and scripts
+- [electron-builder.yml](mdc:electron-builder.yml): Electron build configuration

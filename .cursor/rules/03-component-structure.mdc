@@ -1,0 +1,29 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# UI Components
+
+## Core Components
+
+The application uses a component-based architecture with:
+
+- **UI Components**: Reusable UI elements based on Radix UI
+  - [renderer/components/ui/](mdc:renderer/components/ui): Base UI components
+  - [renderer/components/theme-provider.tsx](mdc:renderer/components/theme-provider.tsx): Theme management
+  - [renderer/components/mode-toggle.tsx](mdc:renderer/components/mode-toggle.tsx): Light/dark mode toggle
+
+## Feature-specific Components
+
+- **CNC Components**: Device control components
+  - [renderer/components/StepperCardDesign2.tsx](mdc:renderer/components/StepperCardDesign2.tsx): Stepper motor control
+  - [renderer/components/ServoCardHybrid.tsx](mdc:renderer/components/ServoCardHybrid.tsx): Servo motor control
+  - [renderer/components/IOPinCard.tsx](mdc:renderer/components/IOPinCard.tsx): I/O pin management
+  - [renderer/components/NewComponentDialog.tsx](mdc:renderer/components/NewComponentDialog.tsx): Component creation
+
+## Component Architecture
+Components follow a consistent pattern with:
+- Props interface defined at the top
+- Internal state management
+- UI rendering with consistent styling

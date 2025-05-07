@@ -1,0 +1,25 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Electron Architecture
+
+## Main Process
+
+The Electron main process handles system-level operations:
+
+- [main/background.ts](mdc:main/background.ts): Main entry point that creates windows and initializes the app
+- [main/preload.ts](mdc:main/preload.ts): Exposes select APIs to the renderer process securely
+
+## IPC Handlers
+
+Communication between main and renderer processes:
+
+- [main/handlers/config-handlers.ts](mdc:main/handlers/config-handlers.ts): Configuration management
+- [main/handlers/ip-handler.ts](mdc:main/handlers/ip-handler.ts): Network handling
+
+## Data Management
+
+- [main/lib/mongodb.ts](mdc:main/lib/mongodb.ts): MongoDB connection and operations
+- [main/lib/utils.ts](mdc:main/lib/utils.ts): Utility functions for the main process

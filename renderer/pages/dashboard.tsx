@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, ArrowLeft, Save, Loader2 } from "lucide-react";
+import { PlusCircle, ArrowLeft, Save, Loader2, PlaySquare } from "lucide-react";
 import StepperCardDesign2 from "@/components/StepperCardDesign2";
 import ServoCardHybrid from "@/components/ServoCardHybrid";
 import IOPinCard from "@/components/IOPinCard";
@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 import { motion, AnimatePresence } from "framer-motion";
@@ -27,7 +26,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   HardwareConfig,
   ConfiguredComponent,
-  SavedConfigDocument,
   FullConfigDataIPC,
 } from "../../common/types";
 
@@ -55,8 +53,8 @@ type StepperMotorDisplay = {
   type: "stepper";
   name: string;
   position: number;
-  speed: number;
-  acceleration: number;
+  speed: number; // This is the live/current speed setting for the card
+  acceleration: number; // This is the live/current accel setting for the card
   stepsPerInch: number;
   minPosition: number;
   maxPosition: number;
@@ -65,6 +63,10 @@ type StepperMotorDisplay = {
     direction: number;
     enable?: number;
   };
+  // Add fields for initial settings from config
+  initialJogUnit?: "steps" | "inches";
+  initialJogAmount?: number;
+  initialJogAmountInches?: number;
 };
 
 type ServoMotorDisplay = {
@@ -77,6 +79,7 @@ type ServoMotorDisplay = {
   pins: {
     control: number;
   };
+  initialPresets?: number[];
 };
 
 type IOPinDisplay = {
@@ -342,33 +345,39 @@ export default function Dashboard() {
       const displayMotors: MotorDisplay[] = [];
 
       hwConfig.servos.forEach((servo) => {
+        const servoConfig = servo as any; // Type assertion for new fields
         displayMotors.push({
           id: servo.id,
           type: "servo",
           name: servo.name,
-          angle: 90,
+          angle: 90, // Default or last known state
           minAngle: servo.minAngle ?? 0,
           maxAngle: servo.maxAngle ?? 180,
           pins: { control: servo.pins[0] },
+          initialPresets: servoConfig.presets ?? [0, 45, 90, 135, 180],
         });
       });
 
       hwConfig.steppers.forEach((stepper) => {
+        const stepperConfig = stepper as any; // Type assertion
         displayMotors.push({
           id: stepper.id,
           type: "stepper",
           name: stepper.name,
-          position: 0,
-          speed: stepper.maxSpeed ?? 1000,
-          acceleration: stepper.acceleration ?? 500,
-          stepsPerInch: 200,
-          minPosition: -50000,
-          maxPosition: 50000,
+          position: 0, // Default or last known state
+          speed: stepperConfig.maxSpeed ?? 1000, // Map maxSpeed from config to speed prop for card
+          acceleration: stepperConfig.acceleration ?? 500, // Map acceleration from config to accel prop for card
+          stepsPerInch: stepperConfig.stepsPerInch ?? 2000,
+          minPosition: stepperConfig.minPosition ?? -50000,
+          maxPosition: stepperConfig.maxPosition ?? 50000,
           pins: {
             step: stepper.pins[0],
             direction: stepper.pins[1],
             enable: stepper.pins[2],
           },
+          initialJogUnit: stepperConfig.jogUnit ?? "steps",
+          initialJogAmount: stepperConfig.jogAmount ?? 200,
+          initialJogAmountInches: stepperConfig.jogAmountInches ?? 0.1,
         });
       });
 
@@ -1240,6 +1249,94 @@ export default function Dashboard() {
     setInfoMessage("Pins updated. Remember to Save Configuration.");
   };
 
+  // NEW: Handler for live stepper settings changes from StepperCardDesign2
+  const handleStepperSettingsChange = useCallback(
+    (
+      motorId: string,
+      newSettings: {
+        minPosition?: number;
+        maxPosition?: number;
+        stepsPerInch?: number;
+        jogUnit?: "steps" | "inches";
+        jogAmount?: number; // Corresponds to steps if jogUnit is steps
+        jogAmountInches?: number; // Corresponds to inches if jogUnit is inches
+        speed?: number; // This is 'maxSpeed' in the hardwareConfig
+        acceleration?: number; // This is 'acceleration' in the hardwareConfig
+      }
+    ) => {
+      setHardwareConfig((prevHwConfig) => {
+        const updatedSteppers = prevHwConfig.steppers.map((stepper) => {
+          if (stepper.id === motorId) {
+            const updatedStepper = { ...stepper } as any; // Assert type for modification
+            if (newSettings.minPosition !== undefined) {
+              updatedStepper.minPosition = newSettings.minPosition;
+            }
+            if (newSettings.maxPosition !== undefined) {
+              updatedStepper.maxPosition = newSettings.maxPosition;
+            }
+            if (newSettings.stepsPerInch !== undefined) {
+              updatedStepper.stepsPerInch = newSettings.stepsPerInch;
+            }
+            if (newSettings.jogUnit !== undefined) {
+              updatedStepper.jogUnit = newSettings.jogUnit;
+            }
+            if (newSettings.jogAmount !== undefined) {
+              // This is for steps
+              updatedStepper.jogAmount = newSettings.jogAmount;
+            }
+            if (newSettings.jogAmountInches !== undefined) {
+              updatedStepper.jogAmountInches = newSettings.jogAmountInches;
+            }
+            if (newSettings.speed !== undefined) {
+              // Card sends 'speed'
+              updatedStepper.maxSpeed = newSettings.speed; // Save as 'maxSpeed' in config
+            }
+            if (newSettings.acceleration !== undefined) {
+              updatedStepper.acceleration = newSettings.acceleration;
+            }
+            return updatedStepper;
+          }
+          return stepper;
+        });
+        return { ...prevHwConfig, steppers: updatedSteppers };
+      });
+    },
+    [setHardwareConfig]
+  );
+
+  // NEW: Handler for live servo settings changes from ServoCardHybrid
+  const handleServoSettingsChange = useCallback(
+    (
+      servoId: string,
+      newSettings: {
+        presets?: number[];
+        minAngle?: number;
+        maxAngle?: number;
+      }
+    ) => {
+      setHardwareConfig((prevHwConfig) => {
+        const updatedServos = prevHwConfig.servos.map((servo) => {
+          if (servo.id === servoId) {
+            const updatedServo = { ...servo } as any; // Assert type for modification
+            if (newSettings.presets !== undefined) {
+              updatedServo.presets = newSettings.presets;
+            }
+            if (newSettings.minAngle !== undefined) {
+              updatedServo.minAngle = newSettings.minAngle;
+            }
+            if (newSettings.maxAngle !== undefined) {
+              updatedServo.maxAngle = newSettings.maxAngle;
+            }
+            return updatedServo;
+          }
+          return servo;
+        });
+        return { ...prevHwConfig, servos: updatedServos };
+      });
+    },
+    [setHardwareConfig]
+  );
+
   // Handle saving the configuration
   const handleSaveConfiguration = async () => {
     if (!currentConfig) {
@@ -1548,7 +1645,6 @@ export default function Dashboard() {
                 {currentConfig.name}
               </h1>
               <p className="text-gray-500 dark:text-gray-400">
-                {/* Connection Status Display */}
                 Status:{" "}
                 <span
                   className={`font-medium ${
@@ -1586,6 +1682,14 @@ export default function Dashboard() {
           </div>
 
           <div className="flex gap-2 flex-shrink-0">
+            <Button
+              variant="outline"
+              className="flex items-center gap-2"
+              onClick={() => router.push(`/sequences?config=${configId}`)}
+            >
+              <PlaySquare className="h-4 w-4" />
+              Sequences
+            </Button>
             <Button
               variant="outline"
               className="flex items-center gap-2"
@@ -1627,55 +1731,70 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {motors.map((motor) => {
               if (motor.type === "stepper") {
+                // Ensure all props for StepperMotorDisplay are passed
+                const stepperMotor = motor as StepperMotorDisplay;
                 return (
                   <StepperCardDesign2
-                    key={motor.id}
-                    id={motor.id}
-                    name={motor.name}
+                    key={stepperMotor.id}
+                    id={stepperMotor.id}
+                    name={stepperMotor.name}
                     position={
-                      (componentStates[motor.id] as number) ?? motor.position
+                      (componentStates[stepperMotor.id] as number) ??
+                      stepperMotor.position
                     }
-                    speed={motor.speed}
-                    acceleration={motor.acceleration}
-                    stepsPerInch={motor.stepsPerInch}
-                    minPosition={motor.minPosition}
-                    maxPosition={motor.maxPosition}
-                    pins={motor.pins}
-                    onDelete={() => handleDeleteMotor(motor.id)}
-                    onDuplicate={() => handleDuplicateMotor(motor)}
-                    onEditPins={() => handleEditPins(motor)}
+                    speed={stepperMotor.speed} // This is initialSpeed for the card
+                    acceleration={stepperMotor.acceleration} // This is initialAcceleration for the card
+                    stepsPerInch={stepperMotor.stepsPerInch}
+                    minPosition={stepperMotor.minPosition}
+                    maxPosition={stepperMotor.maxPosition}
+                    pins={stepperMotor.pins}
+                    initialJogUnit={stepperMotor.initialJogUnit}
+                    initialJogAmount={stepperMotor.initialJogAmount}
+                    initialJogAmountInches={stepperMotor.initialJogAmountInches}
+                    onDelete={() => handleDeleteMotor(stepperMotor.id)}
+                    onDuplicate={() => handleDuplicateMotor(stepperMotor)}
+                    onEditPins={() => handleEditPins(stepperMotor)}
                     sendMessage={sendMessage}
+                    onSettingsChange={handleStepperSettingsChange}
                   />
                 );
               } else if (motor.type === "servo") {
+                // Ensure all props for ServoMotorDisplay are passed
+                const servoMotor = motor as ServoMotorDisplay;
                 return (
                   <ServoCardHybrid
-                    key={motor.id}
-                    id={motor.id}
-                    name={motor.name}
-                    angle={(componentStates[motor.id] as number) ?? motor.angle}
-                    minAngle={motor.minAngle}
-                    maxAngle={motor.maxAngle}
-                    pins={motor.pins}
-                    onDelete={() => handleDeleteMotor(motor.id)}
-                    onDuplicate={() => handleDuplicateMotor(motor)}
-                    onEditPins={() => handleEditPins(motor)}
+                    key={servoMotor.id}
+                    id={servoMotor.id}
+                    name={servoMotor.name}
+                    angle={
+                      (componentStates[servoMotor.id] as number) ??
+                      servoMotor.angle
+                    }
+                    minAngle={servoMotor.minAngle}
+                    maxAngle={servoMotor.maxAngle}
+                    pins={servoMotor.pins}
+                    initialPresets={servoMotor.initialPresets}
+                    onDelete={() => handleDeleteMotor(servoMotor.id)}
+                    onDuplicate={() => handleDuplicateMotor(servoMotor)}
+                    onEditPins={() => handleEditPins(servoMotor)}
                     sendMessage={sendMessage}
+                    onSettingsChange={handleServoSettingsChange}
                   />
                 );
               } else if (motor.type === "iopin") {
+                const ioPin = motor as IOPinDisplay;
                 return (
                   <IOPinCard
-                    key={motor.id}
-                    id={motor.id}
-                    name={motor.name}
-                    pinNumber={motor.pinNumber}
-                    mode={motor.mode}
-                    type={motor.pinType}
-                    value={(componentStates[motor.id] as number) ?? motor.value}
-                    onDelete={() => handleDeleteMotor(motor.id)}
-                    onDuplicate={() => handleDuplicateMotor(motor)}
-                    onEditPin={() => handleEditPins(motor)}
+                    key={ioPin.id}
+                    id={ioPin.id}
+                    name={ioPin.name}
+                    pinNumber={ioPin.pinNumber}
+                    mode={ioPin.mode}
+                    type={ioPin.type}
+                    value={(componentStates[ioPin.id] as number) ?? ioPin.value}
+                    onDelete={() => handleDeleteMotor(ioPin.id)}
+                    onDuplicate={() => handleDuplicateMotor(ioPin)}
+                    onEditPin={() => handleEditPins(ioPin)}
                     sendMessage={sendMessage}
                   />
                 );
@@ -1703,41 +1822,58 @@ export default function Dashboard() {
             ];
             if (componentData.pins.enable) pins.push(componentData.pins.enable);
 
+            // Initialize new stepper with defaults for new fields
             newComponent = {
               id: newId,
-              type: "Stepper",
+              type: "Stepper", // This should match the type in HardwareConfig
               name: componentData.name,
               pins: pins,
-              maxSpeed: 1000,
-              acceleration: 500,
-            };
+              maxSpeed: 1000, // Default from card
+              acceleration: 500, // Default from card
+              stepsPerInch: 2000, // Default
+              minPosition: -50000, // Default
+              maxPosition: 50000, // Default
+              jogUnit: "steps", // Default
+              jogAmount: 200, // Default
+              jogAmountInches: 0.1, // Default
+            } as any; // Asserting because ConfiguredComponent might not have all fields yet
 
             configPayload.pulPin = componentData.pins.step;
             configPayload.dirPin = componentData.pins.direction;
             if (componentData.pins.enable)
               configPayload.enaPin = componentData.pins.enable;
-            configPayload.maxSpeed = 1000;
-            configPayload.acceleration = 500;
+            configPayload.maxSpeed = (newComponent as any).maxSpeed;
+            configPayload.acceleration = (newComponent as any).acceleration;
+            configPayload.stepsPerInch = (newComponent as any).stepsPerInch;
+            configPayload.minPosition = (newComponent as any).minPosition;
+            configPayload.maxPosition = (newComponent as any).maxPosition;
+            configPayload.jogUnit = (newComponent as any).jogUnit;
+            configPayload.jogAmount = (newComponent as any).jogAmount;
+            configPayload.jogAmountInches = (
+              newComponent as any
+            ).jogAmountInches;
           } else if (componentData.type === "servo") {
             componentGroup = "servos";
             newComponent = {
               id: newId,
-              type: "Servo",
+              type: "Servo", // This should match the type in HardwareConfig
               name: componentData.name,
               pins: [componentData.pins.control],
               minAngle: 0,
               maxAngle: 180,
-            };
+              presets: [0, 45, 90, 135, 180], // Default presets
+            } as any; // Asserting
 
             configPayload.pin = componentData.pins.control;
-            configPayload.minAngle = 0;
-            configPayload.maxAngle = 180;
+            configPayload.minAngle = (newComponent as any).minAngle;
+            configPayload.maxAngle = (newComponent as any).maxAngle;
+            configPayload.presets = (newComponent as any).presets;
           } else {
             // IO Pin
             componentGroup = "pins";
             newComponent = {
               id: newId,
-              type: `${componentData.pins.type}_${componentData.pins.mode}`, // e.g. "digital_output" or "analog_input"
+              type: `${componentData.pins.type}_${componentData.pins.mode}`,
               name: componentData.name,
               pins: [componentData.pins.pin],
             };
