@@ -83,6 +83,10 @@ export default function ConfigurationsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
+  // Connection state from the connection page
+  const [connectionStatus, setConnectionStatus] = useState<string>("unknown");
+  const [lastIpOctet, setLastIpOctet] = useState<string>("");
+
   // New Config Dialog
   const [isNewConfigOpenState, setIsNewConfigOpenState] = useState(false);
   const [newConfigName, setNewConfigName] = useState("");
@@ -139,6 +143,59 @@ export default function ConfigurationsPage() {
     setOpenDropdownId(null);
     setIsDescriptionDialogOpenState(open);
   };
+
+  // Check connection status when page loads
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        // Get the connection status via IPC
+        const connectionData = await window.ipc.invoke("get-connection-status");
+
+        if (connectionData && connectionData.connected) {
+          setConnectionStatus("connected");
+          setLastIpOctet(connectionData.ipOctet || "");
+
+          // Keep the connection alive
+          window.ipc.invoke("keep-connection-alive");
+        } else if (connectionData && connectionData.stale) {
+          setConnectionStatus("stale");
+          setLastIpOctet(connectionData.ipOctet || "");
+        } else {
+          setConnectionStatus("disconnected");
+        }
+      } catch (error) {
+        console.error("Error checking connection status:", error);
+        setConnectionStatus("error");
+      }
+    };
+
+    // Set up websocket status event listener
+    const wsStatusListener = window.ipc.on("ws-status", (data: any) => {
+      console.log("WebSocket status update:", data);
+
+      if (data.status === "disconnected") {
+        setConnectionStatus("disconnected");
+        setErrorMessage("Connection to board lost. Please reconnect.");
+      } else if (data.status === "error") {
+        setConnectionStatus("error");
+        setErrorMessage(`Connection error: ${data.error || "Unknown error"}`);
+      }
+    });
+
+    // Run connection check
+    checkConnection();
+
+    // Set up periodic connection check
+    const connectionInterval = setInterval(() => {
+      checkConnection();
+    }, 30000); // Check every 30 seconds
+
+    // Cleanup on unmount
+    return () => {
+      clearInterval(connectionInterval);
+      if (wsStatusListener) wsStatusListener();
+    };
+  }, []);
 
   useEffect(() => {
     const fetchConfigs = async () => {
@@ -305,6 +362,8 @@ export default function ConfigurationsPage() {
     if (isProcessing) return;
     setOpenDropdownId(null);
     console.log(`[ConfigPage] Loading config: ${id}`);
+
+    // Navigate to dashboard with config ID
     router.push(`/dashboard?config=${id}`);
   };
 
@@ -421,6 +480,51 @@ export default function ConfigurationsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950">
+      {/* Connection status banner */}
+      {connectionStatus === "connected" ? (
+        <div className="bg-green-500 text-white p-2 text-center">
+          <p>
+            Connected to board at 192.168.1.{lastIpOctet} |
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => router.push("/connection")}
+              className="ml-2 bg-white/90 hover:bg-white text-green-700"
+            >
+              Reconnect
+            </Button>
+          </p>
+        </div>
+      ) : connectionStatus === "stale" ? (
+        <div className="bg-orange-500 text-white p-2 text-center">
+          <p>
+            Connection may be stale |
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => router.push("/connection")}
+              className="ml-2 bg-white/90 hover:bg-white text-orange-700"
+            >
+              Reconnect
+            </Button>
+          </p>
+        </div>
+      ) : (
+        <div className="bg-yellow-500 text-black p-2 text-center">
+          <p>
+            Not connected to board |
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => router.push("/connection")}
+              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:hover:bg-white"
+            >
+              Connect to Board
+            </Button>
+          </p>
+        </div>
+      )}
+
       <div className="container mx-auto p-4 md:p-6">
         <header className="mb-8 flex flex-col sm:flex-row justify-between items-center gap-4">
           <div>

@@ -8,19 +8,10 @@ import StepperCardDesign2 from "@/components/StepperCardDesign2";
 import ServoCardHybrid from "@/components/ServoCardHybrid";
 import IOPinCard from "@/components/IOPinCard";
 import { NewComponentDialog } from "@/components/NewComponentDialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogClose,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
+
 import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
-import { motion, AnimatePresence } from "framer-motion";
+import { v4 as uuidv4 } from "uuid";
 
 // Import shared types
 import {
@@ -84,12 +75,12 @@ type ServoMotorDisplay = {
 
 type IOPinDisplay = {
   id: string;
-  type: "iopin";
+  type: "digital";
   name: string;
   pinNumber: number;
   mode: "input" | "output";
-  pinType: "digital" | "analog" | "pwm";
-  value: number;
+  pinType?: "digital" | "analog" | "pwm";
+  value?: number;
 };
 
 type MotorDisplay = StepperMotorDisplay | ServoMotorDisplay | IOPinDisplay;
@@ -121,171 +112,6 @@ const initialHardwareConfig: HardwareConfig = {
   sensors: [],
   relays: [],
   pins: [],
-};
-
-// Removed Mock Configurations
-// const mockConfigurations: Record<string, Configuration> = { ... };
-
-// ConnectionManager component - add after imports
-const ConnectionManager = ({
-  connectionStatus,
-  lastIpOctet,
-  setLastIpOctet,
-  isFetchingIp,
-  setIsFetchingIp,
-  handleConnect,
-  setConnectionStatus,
-  setErrorMessage,
-  setInfoMessage,
-  isConnectionDialogOpen,
-  setIsConnectionDialogOpen,
-}: {
-  connectionStatus: ConnectionStatus;
-  lastIpOctet: string;
-  setLastIpOctet: (value: string) => void;
-  isFetchingIp: boolean;
-  setIsFetchingIp: (value: boolean) => void;
-  handleConnect: (octet: string) => void;
-  setConnectionStatus: (status: ConnectionStatus) => void;
-  setErrorMessage: (message: string | null) => void;
-  setInfoMessage: (message: string | null) => void;
-  isConnectionDialogOpen: boolean;
-  setIsConnectionDialogOpen: (open: boolean) => void;
-}) => {
-  if (connectionStatus === "fetchingIp") {
-    return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
-      >
-        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full text-center">
-          <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
-            Connecting to Board...
-          </h2>
-          <p className="text-gray-600 dark:text-gray-300 mb-6">
-            Attempting automatic IP detection...
-          </p>
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-6"></div>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setIsFetchingIp(false);
-              setErrorMessage(null);
-              setConnectionStatus("idle");
-              setIsConnectionDialogOpen(true);
-            }}
-            className="mt-4"
-          >
-            Enter IP Manually
-          </Button>
-        </div>
-      </motion.div>
-    );
-  }
-
-  return (
-    <>
-      <Dialog
-        open={isConnectionDialogOpen}
-        onOpenChange={setIsConnectionDialogOpen}
-      >
-        <DialogContent className="sm:max-w-md bg-white dark:bg-gray-800">
-          <DialogHeader>
-            <DialogTitle className="text-gray-900 dark:text-white">
-              Connect to Board
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-4">
-            <Label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Board IP Address
-            </Label>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500 dark:text-gray-400 font-mono pt-2">
-                192.168.1.
-              </span>
-              <Input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={3}
-                value={lastIpOctet}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (/^\d{0,3}$/.test(value)) {
-                    const num = parseInt(value, 10);
-                    if (value === "" || (num >= 0 && num <= 255)) {
-                      setLastIpOctet(value);
-                    }
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    lastIpOctet &&
-                    parseInt(lastIpOctet, 10) <= 255
-                  ) {
-                    handleConnect(lastIpOctet);
-                    setIsConnectionDialogOpen(false);
-                  }
-                }}
-                className="flex-1 w-20 text-center font-mono"
-                placeholder="XXX"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setConnectionStatus("fetchingIp");
-                setIsFetchingIp(true);
-                setErrorMessage(null);
-                setIsConnectionDialogOpen(false);
-              }}
-            >
-              Try Auto-Detect
-            </Button>
-            <Button
-              onClick={() => {
-                if (lastIpOctet && parseInt(lastIpOctet, 10) <= 255) {
-                  handleConnect(lastIpOctet);
-                  setIsConnectionDialogOpen(false);
-                } else {
-                  setErrorMessage("Please enter a valid IP ending (0-255)");
-                }
-              }}
-              disabled={!lastIpOctet || parseInt(lastIpOctet, 10) > 255}
-            >
-              Connect
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {connectionStatus === "error" && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-2 text-red-500 border-red-300 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/30"
-          onClick={() => setIsConnectionDialogOpen(true)}
-        >
-          Connection Failed - Retry
-        </Button>
-      )}
-
-      {connectionStatus === "idle" && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-2"
-          onClick={() => setIsConnectionDialogOpen(true)}
-        >
-          Connect to Board
-        </Button>
-      )}
-    </>
-  );
 };
 
 // Add custom type to WebSocket for pingIntervalId
@@ -324,18 +150,16 @@ export default function Dashboard() {
 
   // Connection state (copied from DashboardClient)
   const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>("fetchingIp");
+    useState<ConnectionStatus>("idle");
   const [lastIpOctet, setLastIpOctet] = useState("");
-  const [isFetchingIp, setIsFetchingIp] = useState(true);
-
-  // Communication state with enhanced WebSocket type
-  const ws = useRef<EnhancedWebSocket | null>(null);
+  const [isFetchingIp, setIsFetchingIp] = useState(false);
+  const [isConnectionDialogOpen, setIsConnectionDialogOpen] = useState(false);
   const [componentStates, setComponentStates] = useState<ComponentStates>({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  // Connection dialog state - ensure this is defined as React.Dispatch type
-  const [isConnectionDialogOpen, setIsConnectionDialogOpen] = useState(false);
+  // Communication state with enhanced WebSocket type
+  const ws = useRef<EnhancedWebSocket | null>(null);
 
   // --- Helper Functions --- //
 
@@ -395,7 +219,7 @@ export default function Dashboard() {
 
         displayMotors.push({
           id: pin.id,
-          type: "iopin",
+          type: "digital",
           name: pin.name,
           pinNumber: pin.pins[0],
           mode: mode,
@@ -487,22 +311,6 @@ export default function Dashboard() {
     loadConfig();
   }, [configId, router, transformHardwareToDisplay]);
 
-  // Effect to initiate connection AFTER config is loaded
-  useEffect(() => {
-    if (
-      isConfigLoaded &&
-      connectionStatus === "idle" &&
-      !isConnectionDialogOpen
-    ) {
-      console.log(
-        "[Connect Trigger Effect] Config loaded, initiating connection sequence."
-      );
-      setConnectionStatus("fetchingIp");
-      setIsFetchingIp(true);
-      // IP detection effect will now pick this up
-    }
-  }, [isConfigLoaded, connectionStatus, isConnectionDialogOpen]);
-
   useEffect(() => {
     let errorTimer: NodeJS.Timeout | null = null;
     let infoTimer: NodeJS.Timeout | null = null;
@@ -518,123 +326,50 @@ export default function Dashboard() {
     };
   }, [errorMessage, infoMessage]);
 
-  // For WebSocket connection management, we need to declare function references first
-  // to avoid circular dependencies
+  // --- Add Effect to Listen for WebSocket Messages --- //
 
-  // Step 1: Create function references
-  let handleWebSocketMessage: (event: MessageEvent) => void;
-  let syncConfigWithESP32: () => void;
-  let handleConnect: (lastOctet: string) => void;
-  let sendMessage: (message: object) => boolean;
-
-  // Step 2: Implement the message handler first as it has no dependencies on other functions
-  handleWebSocketMessage = useCallback(
-    (event: MessageEvent) => {
-      console.log("WebSocket message received:", event.data);
+  // First, define all the functions needed
+  // Function to send a message through the WebSocket
+  const sendMessage = useCallback(
+    (message: object) => {
       try {
-        if (
-          event.data &&
-          typeof event.data === "string" &&
-          event.data.startsWith("{")
-        ) {
-          const message = JSON.parse(event.data);
-          let stateValue: number | boolean | string | undefined = undefined;
-          let updateId: string | null = null;
+        console.log("Sending WebSocket message:", message);
+        window.ipc
+          .invoke("send-ws-message", message)
+          .then((result) => {
+            if (!result.success) {
+              console.warn("Failed to send message:", message);
+              setErrorMessage(
+                "Failed to send message to device. Please reconnect."
+              );
+              setTimeout(() => setErrorMessage(null), 3000);
 
-          // Handle pong messages (responses to ping)
-          if (message.action === "pong") {
-            // Just log the pong if needed, but don't treat as unhandled
-            console.debug("Received pong response:", message);
-            return;
-          }
-
-          if (message.id !== undefined) {
-            updateId = message.id;
-
-            // Forward message to IOPinCard components through a custom event
-            if (message.value !== undefined || message.status !== undefined) {
-              // Create and dispatch a custom event with the message data
-              const customEvent = new CustomEvent("websocket-message", {
-                detail: message,
-              });
-              window.dispatchEvent(customEvent);
+              // If we're supposed to be connected but sending failed, update the status
+              if (connectionStatus === "connected") {
+                setConnectionStatus("error");
+              }
             }
-
-            // Extract the value based on various possible fields
-            if (message.state !== undefined) {
-              stateValue = message.state;
-            } else if (message.value !== undefined) {
-              stateValue = message.value;
-            } else if (message.position !== undefined) {
-              stateValue = message.position;
-            } else if (message.angle !== undefined) {
-              stateValue = message.angle;
-            }
-          }
-
-          if (updateId !== null && stateValue !== undefined) {
-            console.log(
-              `Updating state for ${
-                message.type ?? "component"
-              } ${updateId}: ${stateValue}`
-            );
-            setComponentStates((prevStates) => ({
-              ...prevStates,
-              [updateId as string]: stateValue,
-            }));
-
-            setMotors((prevMotors) =>
-              prevMotors.map((motor) => {
-                if (motor.id === updateId) {
-                  if (
-                    motor.type === "servo" &&
-                    typeof stateValue === "number"
-                  ) {
-                    return { ...motor, angle: stateValue };
-                  }
-                  if (
-                    motor.type === "stepper" &&
-                    typeof stateValue === "number"
-                  ) {
-                    return { ...motor, position: stateValue };
-                  }
-                  if (
-                    motor.type === "iopin" &&
-                    typeof stateValue === "number"
-                  ) {
-                    return { ...motor, value: stateValue };
-                  }
-                }
-                return motor;
-              })
-            );
-          } else {
-            console.log("Received unhandled/incomplete JSON message:", message);
-          }
-        } else if (typeof event.data === "string") {
-          console.log("Received text message from ESP32:", event.data);
-          if (event.data.startsWith("ERROR:")) {
-            setErrorMessage(event.data);
-          } else if (event.data.startsWith("OK:")) {
-            // Handle OK messages if needed
-          }
-        }
+          })
+          .catch((err) => {
+            console.error("Error sending message:", err);
+            setErrorMessage(`Error sending message: ${err.message}`);
+            setTimeout(() => setErrorMessage(null), 3000);
+          });
+        return true;
       } catch (error) {
-        console.error(
-          "Failed to process WebSocket message:",
-          event.data,
-          error
-        );
-        setErrorMessage("Error processing message from device.");
+        console.error("Unexpected error in sendMessage:", error);
+        setErrorMessage("An unexpected error occurred while sending message");
+        setTimeout(() => setErrorMessage(null), 3000);
+        return false;
       }
     },
-    [setComponentStates, setMotors, setErrorMessage]
+    [connectionStatus]
   );
 
-  // Step 3: Now implement syncConfig which uses sendMessage
-  syncConfigWithESP32 = useCallback(() => {
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-      console.warn("Cannot sync config: WebSocket not open.");
+  // Define the syncConfigWithESP32 function
+  const syncConfigWithESP32 = useCallback(() => {
+    if (connectionStatus !== "connected") {
+      console.warn("Cannot sync config: Not connected.");
       setErrorMessage("Cannot sync: Not connected.");
       return;
     }
@@ -703,15 +438,12 @@ export default function Dashboard() {
               `Sync: Sending configure for ${group}: ${component.name} (ID: ${component.id})`
             );
 
-            // To avoid circular dependency, use direct WebSocket send
-            if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-              const message = {
-                action: "configure",
-                componentGroup: group,
-                config: configPayload,
-              };
-              ws.current.send(JSON.stringify(message));
-            }
+            // Use the sendMessage function
+            sendMessage({
+              action: "configure",
+              componentGroup: group,
+              config: configPayload,
+            });
           } catch (error) {
             console.error(`Failed to send config for ${component.id}:`, error);
           }
@@ -726,293 +458,181 @@ export default function Dashboard() {
     console.log("Finished sending initial configuration sync to ESP32.");
     setInfoMessage("Sync complete!");
     setTimeout(() => setInfoMessage(null), 1500);
-  }, [hardwareConfig, setInfoMessage, setErrorMessage]);
+  }, [
+    hardwareConfig,
+    connectionStatus,
+    setInfoMessage,
+    setErrorMessage,
+    sendMessage,
+  ]);
 
-  // Step 4: Implement handleConnect which uses syncConfig
-  handleConnect = useCallback(
-    (lastOctet: string) => {
-      // Prevent starting a new connection if already connecting
-      if (connectionStatus === "connecting") {
-        console.log(
-          "Connection attempt already in progress. Skipping new request."
-        );
-        return;
-      }
-
-      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-        console.log("WebSocket already open.");
-        setConnectionStatus("connected"); // Ensure status is correct
-        return;
-      }
-
-      // Close any existing connection
-      if (ws.current) {
-        console.log("Closing existing WebSocket before new connection attempt");
-        try {
-          // Only close if it's open or connecting, ignore other states
-          if (
-            ws.current.readyState === WebSocket.OPEN ||
-            ws.current.readyState === WebSocket.CONNECTING
-          ) {
-            ws.current.close();
-          }
-        } catch (closeError) {
-          console.warn("Error closing previous WebSocket:", closeError);
-        }
-        ws.current = null;
-      }
-
-      setConnectionStatus("connecting");
-      setErrorMessage(null);
-      setInfoMessage("Connecting to device...");
-
-      const octetNum = parseInt(lastOctet, 10);
-      if (isNaN(octetNum) || octetNum < 0 || octetNum > 255) {
-        setConnectionStatus("error");
-        setErrorMessage("Invalid IP address ending (must be 0-255)");
-        setInfoMessage(null);
-        setIsFetchingIp(false);
-        return;
-      }
-
-      const fullIp = `192.168.1.${lastOctet}`;
-      const wsUrl = `ws://${fullIp}/ws`;
-      console.log(`Attempting to connect to WebSocket: ${wsUrl}`);
-
+  // Now add the WebSocket message handler effect
+  useEffect(() => {
+    // Listen for WebSocket messages forwarded from the main process
+    const wsMessageListener = window.ipc.on("ws-message", (message: string) => {
+      console.log("Received WebSocket message from main process:", message);
       try {
-        ws.current = new WebSocket(wsUrl);
+        if (typeof message === "string" && message.startsWith("{")) {
+          const data = JSON.parse(message);
+          let stateValue: number | boolean | string | undefined = undefined;
+          let updateId: string | null = null;
 
-        // Set a connection timeout
-        const connectionTimeout = setTimeout(() => {
-          if (ws.current && ws.current.readyState !== WebSocket.OPEN) {
-            console.error("WebSocket connection timeout");
-            setConnectionStatus("error");
-            setErrorMessage(
-              `Connection to ${fullIp} timed out. Device may be offline.`
+          // Handle pong messages (responses to ping)
+          if (data.action === "pong") {
+            console.debug("Received pong response:", data);
+            return;
+          }
+
+          if (data.id !== undefined) {
+            updateId = data.id;
+
+            // Forward message to IOPinCard components through a custom event
+            if (data.value !== undefined || data.status !== undefined) {
+              // Create and dispatch a custom event with the message data
+              const customEvent = new CustomEvent("websocket-message", {
+                detail: data,
+              });
+              window.dispatchEvent(customEvent);
+            }
+
+            // Extract the value based on various possible fields
+            if (data.state !== undefined) {
+              stateValue = data.state;
+            } else if (data.value !== undefined) {
+              stateValue = data.value;
+            } else if (data.position !== undefined) {
+              stateValue = data.position;
+            } else if (data.angle !== undefined) {
+              stateValue = data.angle;
+            }
+          }
+
+          if (updateId !== null && stateValue !== undefined) {
+            console.log(
+              `Updating state for ${
+                data.type ?? "component"
+              } ${updateId}: ${stateValue}`
             );
-            setInfoMessage(null);
-            ws.current.close();
-            ws.current = null;
-          }
-        }, 5000); // 5 second timeout
+            setComponentStates((prevStates) => ({
+              ...prevStates,
+              [updateId as string]: stateValue,
+            }));
 
-        ws.current.onopen = () => {
-          clearTimeout(connectionTimeout);
-          console.log("WebSocket connection established");
-          setConnectionStatus("connected");
-          setErrorMessage(null);
-          setInfoMessage("Connected! Syncing configuration...");
-          setIsFetchingIp(false);
-
-          // Make sure ws.current is still valid before syncing and setting up ping
-          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            // Sync config after connection is established
-            syncConfigWithESP32();
-
-            // Start a periodic ping to keep connection alive
-            const pingInterval = setInterval(() => {
-              if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-                console.log("Sending ping to keep connection alive");
-                try {
-                  ws.current.send(
-                    JSON.stringify({
-                      action: "ping",
-                      componentGroup: "system",
-                      timestamp: Date.now(),
-                    })
-                  );
-                } catch (error) {
-                  console.error("Failed to send ping:", error);
-                  clearInterval(pingInterval);
+            setMotors((prevMotors) =>
+              prevMotors.map((motor) => {
+                if (motor.id === updateId) {
+                  if (
+                    motor.type === "servo" &&
+                    typeof stateValue === "number"
+                  ) {
+                    return { ...motor, angle: stateValue };
+                  }
+                  if (
+                    motor.type === "stepper" &&
+                    typeof stateValue === "number"
+                  ) {
+                    return { ...motor, position: stateValue };
+                  }
+                  if (
+                    motor.type === "digital" &&
+                    typeof stateValue === "number"
+                  ) {
+                    return { ...motor, value: stateValue };
+                  }
                 }
-              } else {
-                clearInterval(pingInterval);
-              }
-            }, 30000); // 30 second ping
-
-            // Store the interval ID in a ref so we can clear it on unmount
-            // Make an additional check that ws.current is still valid
-            if (ws.current) {
-              try {
-                // Clear any existing ping interval first
-                const wsWithPing = ws.current as EnhancedWebSocket;
-                if (wsWithPing.pingIntervalId) {
-                  console.log(
-                    "Clearing previous ping interval before setting new one"
-                  );
-                  clearInterval(wsWithPing.pingIntervalId);
-                }
-
-                // Set the new interval ID
-                wsWithPing.pingIntervalId = pingInterval;
-                console.log(`Ping interval set, ID: ${pingInterval}`);
-              } catch (error) {
-                console.error("Failed to store ping interval ID:", error);
-                clearInterval(pingInterval);
-              }
-            } else {
-              // If ws.current is gone, clear the interval
-              clearInterval(pingInterval);
-            }
+                return motor;
+              })
+            );
           }
-        };
-
-        ws.current.onmessage = (event) => {
-          // Add null check before processing messages
-          if (ws.current) {
-            handleWebSocketMessage(event);
+        } else if (typeof message === "string") {
+          console.log("Received text message from ESP32:", message);
+          if (message.startsWith("ERROR:")) {
+            setErrorMessage(message);
+          } else if (message.startsWith("OK:")) {
+            // Handle OK messages if needed
           }
-        };
-
-        ws.current.onerror = (event) => {
-          clearTimeout(connectionTimeout);
-          console.error("WebSocket error:", event);
-          setConnectionStatus("error");
-          setErrorMessage("Connection error. Check IP and device status.");
-          setInfoMessage(null);
-          // Safely clear interval with null check
-          if (ws.current) {
-            try {
-              const wsWithPing = ws.current as EnhancedWebSocket;
-              if (wsWithPing.pingIntervalId) {
-                console.log(
-                  `Clearing ping interval on error, ID: ${wsWithPing.pingIntervalId}`
-                );
-                clearInterval(wsWithPing.pingIntervalId);
-                wsWithPing.pingIntervalId = undefined; // Clear the reference
-              }
-            } catch (error) {
-              console.error("Error clearing ping interval on error:", error);
-            }
-            // Clear the WebSocket reference on error
-            console.log("Setting ws.current to null on error");
-            ws.current = null;
-          }
-          setIsFetchingIp(false);
-        };
-
-        ws.current.onclose = (event) => {
-          clearTimeout(connectionTimeout);
-          console.log("WebSocket closed:", event.code, event.reason);
-          // If the status was 'connected' before closing, set to 'idle'.
-          // If it was 'connecting' or 'fetchingIp', it likely transitioned to 'error' already.
-          // We only want to reset to 'idle' if it wasn't an immediate connection failure.
-          if (connectionStatus === "connected") {
-            setConnectionStatus("idle");
-            setInfoMessage("Disconnected from device.");
-            setErrorMessage(null);
-          }
-          // Safely clear interval with null check
-          if (ws.current) {
-            try {
-              const wsWithPing = ws.current as EnhancedWebSocket;
-              if (wsWithPing.pingIntervalId) {
-                console.log(
-                  `Clearing ping interval on close, ID: ${wsWithPing.pingIntervalId}`
-                );
-                clearInterval(wsWithPing.pingIntervalId);
-                wsWithPing.pingIntervalId = undefined; // Clear the reference
-              }
-            } catch (error) {
-              console.error("Error clearing ping interval on close:", error);
-            }
-          }
-          // Ensure ws.current is nullified on close regardless of previous state
-          console.log("Setting ws.current to null on close");
-          ws.current = null;
-          setIsFetchingIp(false); // Also reset fetching IP flag
-        };
+        }
       } catch (error) {
-        console.error("Failed to create WebSocket:", error);
+        console.error("Failed to process WebSocket message:", message, error);
+        setErrorMessage("Error processing message from device.");
+      }
+    });
+
+    // Listen for WebSocket status changes
+    const wsStatusListener = window.ipc.on("ws-status", (data: any) => {
+      console.log("WebSocket status update:", data);
+
+      if (data.status === "disconnected") {
+        setConnectionStatus("idle");
+        setErrorMessage("Disconnected from board. Please reconnect.");
+      } else if (data.status === "error") {
+        setConnectionStatus("error");
+        setErrorMessage(`Connection error: ${data.error || "Unknown error"}`);
+      }
+    });
+
+    // Check connection status when component mounts
+    const checkConnection = async () => {
+      try {
+        const connectionData = await window.ipc.invoke("get-connection-status");
+        console.log("Connection status:", connectionData);
+
+        if (connectionData && connectionData.connected) {
+          console.log("Found existing connection:", connectionData);
+          setConnectionStatus("connected");
+          setLastIpOctet(connectionData.ipOctet || "");
+
+          // Send a keep-alive to the main process
+          window.ipc.invoke("keep-connection-alive");
+
+          // If configuration is loaded, sync it to the ESP32
+          if (isConfigLoaded) {
+            syncConfigWithESP32();
+          }
+        } else if (connectionData && connectionData.stale) {
+          // Connection data exists but is stale
+          console.log("Found stale connection:", connectionData);
+          setConnectionStatus("error");
+          setLastIpOctet(connectionData.ipOctet || "");
+          setErrorMessage(
+            "Connection may have been lost. Please reconnect to the board."
+          );
+        } else {
+          console.log("No existing connection found");
+          setConnectionStatus("idle");
+          // Redirect to connection page since we need to connect first
+          setInfoMessage("Please connect to a board first");
+          setTimeout(() => {
+            router.push("/connection");
+          }, 2000);
+        }
+      } catch (err) {
+        console.error("Error checking connection status:", err);
         setConnectionStatus("error");
         setErrorMessage(
-          `Failed to initiate connection: ${(error as Error).message}`
+          "Failed to check connection status. Please reconnect to the board."
         );
-        setInfoMessage(null);
-        ws.current = null;
-        setIsFetchingIp(false);
       }
-    },
-    [
-      syncConfigWithESP32,
-      handleWebSocketMessage,
-      connectionStatus,
-      setConnectionStatus,
-      setErrorMessage,
-      setInfoMessage,
-      setIsFetchingIp,
-    ]
-  );
+    };
 
-  // Step 5: Finally implement sendMessage which depends on handleConnect
-  sendMessage = useCallback(
-    (message: object) => {
-      try {
-        if (!ws.current) {
-          console.warn("WebSocket is null. Cannot send message:", message);
-          setErrorMessage("Not connected to device. Please reconnect.");
-          setTimeout(() => setErrorMessage(null), 3000);
-          return false;
-        }
+    checkConnection();
 
-        if (ws.current.readyState !== WebSocket.OPEN) {
-          console.warn(
-            "WebSocket not open. Cannot send message:",
-            message,
-            "Current state:",
-            ws.current.readyState
-          );
-          setErrorMessage("Connection not ready. Please reconnect.");
-          setTimeout(() => setErrorMessage(null), 3000);
-
-          // Try to reconnect if we have a last IP and aren't already connecting
-          if (
-            connectionStatus !== "connecting" &&
-            connectionStatus !== "fetchingIp" &&
-            lastIpOctet
-          ) {
-            setInfoMessage("Attempting to reconnect...");
-            setConnectionStatus("connecting");
-            handleConnect(lastIpOctet);
-          }
-          return false;
-        }
-
-        // If we get here, WebSocket is open and ready to send
-        try {
-          const jsonMessage = JSON.stringify(message);
-          console.log("Sending WebSocket message:", jsonMessage);
-          ws.current.send(jsonMessage);
-          return true;
-        } catch (sendError) {
-          console.error(
-            "Failed to stringify or send WebSocket message:",
-            sendError
-          );
-          if (sendError instanceof Error) {
-            setErrorMessage(`Failed to send message: ${sendError.message}`);
-          } else {
-            setErrorMessage("Failed to send message");
-          }
-          setTimeout(() => setErrorMessage(null), 3000);
-          return false;
-        }
-      } catch (unexpectedError) {
-        console.error("Unexpected error in sendMessage:", unexpectedError);
-        setErrorMessage("An unexpected error occurred while sending message");
-        setTimeout(() => setErrorMessage(null), 3000);
-        return false;
+    // Set up keep-alive interval
+    const keepAliveInterval = setInterval(() => {
+      if (connectionStatus === "connected") {
+        window.ipc.invoke("keep-connection-alive").catch((err) => {
+          console.error("Failed to send keep-alive:", err);
+        });
       }
-    },
-    [
-      connectionStatus,
-      lastIpOctet,
-      handleConnect,
-      setConnectionStatus,
-      setErrorMessage,
-      setInfoMessage,
-    ]
-  );
+    }, 60000); // Every minute
+
+    // Cleanup function
+    return () => {
+      if (wsMessageListener) wsMessageListener();
+      if (wsStatusListener) wsStatusListener();
+      clearInterval(keepAliveInterval);
+    };
+  }, [router, isConfigLoaded, syncConfigWithESP32, connectionStatus]);
 
   // --- Motor CRUD Handlers (To be adapted) --- //
 
@@ -1070,7 +690,7 @@ export default function Dashboard() {
         (m) => m.id === motorToDup.id
       );
       group = "steppers";
-    } else if (motorToDup.type === "iopin") {
+    } else if (motorToDup.type === "digital") {
       originalComponent = hardwareConfig.pins.find(
         (m) => m.id === motorToDup.id
       );
@@ -1161,7 +781,7 @@ export default function Dashboard() {
         enable: 0,
         control: motor.pins.control,
       });
-    } else if (motor.type === "iopin") {
+    } else if (motor.type === "digital") {
       // For IO pins we only use a single pin
       setEditPins({
         step: 0,
@@ -1174,79 +794,6 @@ export default function Dashboard() {
       title: "Edit Pins Action",
       description: "Need to implement Edit Pins Dialog.",
     });
-  };
-
-  // Handle saving edited pins (placeholder - needs dialog)
-  const handleSavePins = () => {
-    if (!editingMotor) return;
-
-    let group: keyof HardwareConfig;
-    let pinsArray: number[];
-    let updatedComponent: Partial<ConfiguredComponent> = { pins: [] };
-
-    if (editingMotor.type === "stepper") {
-      group = "steppers";
-      pinsArray = [editPins.step, editPins.direction];
-      if (editPins.enable) pinsArray.push(editPins.enable);
-      updatedComponent.pins = pinsArray;
-    } else if (editingMotor.type === "servo") {
-      group = "servos";
-      pinsArray = [editPins.control];
-      updatedComponent.pins = pinsArray;
-    } else {
-      // IO Pin
-      group = "pins";
-      pinsArray = [editPins.control]; // Using the control field for the pin number
-      updatedComponent.pins = pinsArray;
-    }
-
-    setHardwareConfig((prev) => ({
-      ...prev,
-      [group]: prev[group].map((comp) =>
-        comp.id === editingMotor.id ? { ...comp, ...updatedComponent } : comp
-      ),
-    }));
-
-    const originalComponent = hardwareConfig[group].find(
-      (c) => c.id === editingMotor.id
-    );
-    if (originalComponent) {
-      let configPayload: any = {
-        id: editingMotor.id,
-        name: originalComponent.name,
-      };
-      if (group === "servos") {
-        configPayload.pin = editPins.control;
-        if (originalComponent.minAngle !== undefined)
-          configPayload.minAngle = originalComponent.minAngle;
-        if (originalComponent.maxAngle !== undefined)
-          configPayload.maxAngle = originalComponent.maxAngle;
-      } else if (group === "steppers") {
-        configPayload.pulPin = editPins.step;
-        configPayload.dirPin = editPins.direction;
-        if (editPins.enable) configPayload.enaPin = editPins.enable;
-        if (originalComponent.maxSpeed !== undefined)
-          configPayload.maxSpeed = originalComponent.maxSpeed;
-        if (originalComponent.acceleration !== undefined)
-          configPayload.acceleration = originalComponent.acceleration;
-      } else if (group === "pins") {
-        configPayload.pin = editPins.control;
-        // Extract mode and type from component.type (e.g., "digital_output")
-        const typeParts = originalComponent.type.split("_");
-        if (typeParts.length === 2) {
-          configPayload.pinType = typeParts[0];
-          configPayload.mode = typeParts[1];
-        }
-      }
-      sendMessage({
-        action: "configure",
-        componentGroup: group,
-        config: configPayload,
-      });
-    }
-
-    setEditingMotor(null);
-    setInfoMessage("Pins updated. Remember to Save Configuration.");
   };
 
   // NEW: Handler for live stepper settings changes from StepperCardDesign2
@@ -1452,7 +999,7 @@ export default function Dashboard() {
     if (connectionStatus === "error" && lastIpOctet) {
       reconnectTimer = setTimeout(() => {
         console.log("Attempting to reconnect after connection error...");
-        handleConnect(lastIpOctet);
+        sendMessage({ action: "connect", ipOctet: lastIpOctet });
       }, 10000); // Try to reconnect after 10 seconds
     }
 
@@ -1461,7 +1008,7 @@ export default function Dashboard() {
         clearTimeout(reconnectTimer);
       }
     };
-  }, [connectionStatus, lastIpOctet, handleConnect]);
+  }, [connectionStatus, lastIpOctet, sendMessage]);
 
   // Add back IP detection effect
   useEffect(() => {
@@ -1511,7 +1058,7 @@ export default function Dashboard() {
                 `IPC: Extracted last octet: ${octet}. Attempting connection.`
               );
               setLastIpOctet(octet);
-              handleConnect(octet);
+              sendMessage({ action: "connect", ipOctet: octet });
             } else {
               console.error("IPC: Invalid IP format received:", data.ip);
               setErrorMessage("Received invalid IP format from device.");
@@ -1556,7 +1103,7 @@ export default function Dashboard() {
     };
   }, [
     connectionStatus,
-    handleConnect,
+    sendMessage,
     setLastIpOctet,
     setErrorMessage,
     setConnectionStatus,
@@ -1601,31 +1148,23 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <AnimatePresence>
-        {errorMessage && (
-          <motion.div
-            key="error-msg-dash-global"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="absolute top-4 right-4 z-50 p-3 rounded-md bg-red-900/80 backdrop-blur-sm text-red-100 text-sm shadow-lg max-w-md"
-          >
-            {errorMessage}
-          </motion.div>
-        )}
-        {infoMessage && (
-          <motion.div
-            key="info-msg-dash-global"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="absolute top-4 right-4 z-50 p-3 rounded-md bg-blue-900/80 backdrop-blur-sm text-blue-100 text-sm shadow-lg max-w-md"
-          >
-            {infoMessage}
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 flex flex-col">
+      {/* Header notification for connection status */}
+      {connectionStatus !== "connected" && (
+        <div className="bg-yellow-500 text-black p-2 text-center">
+          <p>
+            No connection to board.{" "}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => router.push("/connection")}
+              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:hover:bg-white"
+            >
+              Connect to Board
+            </Button>
+          </p>
+        </div>
+      )}
 
       <div className="container mx-auto p-4 md:p-6">
         <header className="mb-8 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -1655,28 +1194,25 @@ export default function Dashboard() {
                       : "text-yellow-500"
                   }`}
                 >
-                  {connectionStatus === "fetchingIp"
-                    ? "Detecting IP"
-                    : connectionStatus}
+                  {connectionStatus === "connected"
+                    ? "Connected"
+                    : "Disconnected"}
                 </span>
                 {connectionStatus === "connected" &&
                   ` (192.168.1.${lastIpOctet})`}
                 {connectionStatus === "connecting" && (
                   <Loader2 className="inline-block h-4 w-4 animate-spin ml-1" />
                 )}
-                <ConnectionManager
-                  connectionStatus={connectionStatus}
-                  lastIpOctet={lastIpOctet}
-                  setLastIpOctet={setLastIpOctet}
-                  isFetchingIp={isFetchingIp}
-                  setIsFetchingIp={setIsFetchingIp}
-                  handleConnect={handleConnect}
-                  setConnectionStatus={setConnectionStatus}
-                  setErrorMessage={setErrorMessage}
-                  setInfoMessage={setInfoMessage}
-                  isConnectionDialogOpen={isConnectionDialogOpen}
-                  setIsConnectionDialogOpen={setIsConnectionDialogOpen}
-                />
+                {connectionStatus !== "connected" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-2"
+                    onClick={() => router.push("/connection")}
+                  >
+                    Connect to Board
+                  </Button>
+                )}
               </p>
             </div>
           </div>
@@ -1781,7 +1317,7 @@ export default function Dashboard() {
                     onSettingsChange={handleServoSettingsChange}
                   />
                 );
-              } else if (motor.type === "iopin") {
+              } else if (motor.type === "digital") {
                 const ioPin = motor as IOPinDisplay;
                 return (
                   <IOPinCard
@@ -1790,7 +1326,7 @@ export default function Dashboard() {
                     name={ioPin.name}
                     pinNumber={ioPin.pinNumber}
                     mode={ioPin.mode}
-                    type={ioPin.type}
+                    type={ioPin.pinType}
                     value={(componentStates[ioPin.id] as number) ?? ioPin.value}
                     onDelete={() => handleDeleteMotor(ioPin.id)}
                     onDuplicate={() => handleDuplicateMotor(ioPin)}
@@ -1833,7 +1369,7 @@ export default function Dashboard() {
               stepsPerInch: 2000, // Default
               minPosition: -50000, // Default
               maxPosition: 50000, // Default
-              jogUnit: "steps", // Default
+              jogUnit: "steps" as const,
               jogAmount: 200, // Default
               jogAmountInches: 0.1, // Default
             } as any; // Asserting because ConfiguredComponent might not have all fields yet
@@ -1896,7 +1432,7 @@ export default function Dashboard() {
 
           setInfoMessage(
             `${
-              componentData.type === "iopin" ? "IO Pin" : "Motor"
+              componentData.type === "digital" ? "IO Pin" : "Motor"
             } added. Remember to Save Configuration.`
           );
         }}

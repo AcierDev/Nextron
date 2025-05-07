@@ -5,6 +5,7 @@ import serve from "electron-serve";
 import { createWindow } from "./helpers";
 import { setupIpHandlers } from "./handlers/ip-handler";
 import { setupConfigHandlers } from "./handlers/config-handlers";
+import { setupConnectionHandlers } from "./handlers/connection-handler";
 import { spawn, execSync, ChildProcess } from "child_process";
 import fs from "fs";
 import { SerialPort } from "serialport";
@@ -267,8 +268,10 @@ function getPioPath(): string {
   });
   console.log("======================================");
 
+  // Set up all handlers
   setupIpHandlers();
   setupConfigHandlers();
+  setupConnectionHandlers();
 
   const mainWindow = createWindow("main", {
     width: 1000,

@@ -77,11 +77,14 @@
     "mongodb": "^6.16.0",
     "next-themes": "^0.3.0",
     "tailwind-merge": "^2.3.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
     "@types/react": "^18.2.52",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.19",
     "concurrently": "^9.1.2",
     "electron": "^31.0.1",
