@@ -517,7 +517,7 @@ export default function ConfigurationsPage() {
               variant="secondary"
               size="sm"
               onClick={() => router.push("/connection")}
-              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:hover:bg-white"
+              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:text-black dark:hover:bg-white"
             >
               Connect to Board
             </Button>

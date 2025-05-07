@@ -1,11 +1,10 @@
 #include <Arduino.h>
-
 #include "config.h"
-#include "hardware/io_pin.h"
 #include "hardware/servo.h"
 #include "hardware/stepper.h"
-#include "message_handler.h"
+#include "hardware/io_pin.h"
 #include "network/wifi_manager.h"
+#include "message_handler.h"
 
 // FastAccelStepper engine setup
 FastAccelStepperEngine engine = FastAccelStepperEngine();
@@ -16,7 +15,7 @@ AsyncWebSocket ws("/ws");
 
 void setup() {
   Serial.begin(115200);
-
+  
   // Initialize WiFi connection
   initWiFi();
 
@@ -25,7 +24,7 @@ void setup() {
 
   // Initialize WebSocket server
   initWebSocketServer();
-
+  
   Serial.println("System initialized and ready");
 }
 
@@ -48,10 +47,10 @@ void loop() {
   // Non-blocking delay replacement
   static unsigned long previousMillis = 0;
   unsigned long currentMillis = millis();
-  const unsigned long interval = 1;  // 1ms interval
-
+  const unsigned long interval = 1; // 1ms interval
+  
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
     // Any tasks that need to run every 1ms would go here
   }
-}
+} 

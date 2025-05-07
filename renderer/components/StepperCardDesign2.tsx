@@ -370,21 +370,18 @@ export default function StepperCardDesign2({
           <div className="flex flex-col">
             <CardTitle className="flex items-center">
               {name}
-              <Badge variant="outline" className="ml-2">
-                {(position / stepsPerInch).toFixed(2)}"
-              </Badge>
+              <div className="flex mt-1 pl-2 text-xs text-muted-foreground">
+                <Badge variant="outline" className="mr-1">
+                  Step: {pins.step}
+                </Badge>
+                <Badge variant="outline" className="mr-1">
+                  Dir: {pins.direction}
+                </Badge>
+                {pins.enable && (
+                  <Badge variant="outline">En: {pins.enable}</Badge>
+                )}
+              </div>
             </CardTitle>
-            <div className="flex mt-1 text-xs text-muted-foreground">
-              <Badge variant="outline" className="mr-1">
-                Step: {pins.step}
-              </Badge>
-              <Badge variant="outline" className="mr-1">
-                Dir: {pins.direction}
-              </Badge>
-              {pins.enable && (
-                <Badge variant="outline">En: {pins.enable}</Badge>
-              )}
-            </div>
           </div>
           <div className="flex items-center gap-1">
             <Button

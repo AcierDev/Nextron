@@ -51,9 +51,15 @@ interface ServoCardProps {
   onEditPins: () => void;
   sendMessage: SendMessage; // Added sendMessage prop
   initialPresets?: number[];
+  initialSpeed?: number; // Add initial speed
   onSettingsChange?: (
     id: string,
-    newSettings: { presets?: number[]; minAngle?: number; maxAngle?: number }
+    newSettings: {
+      presets?: number[];
+      minAngle?: number;
+      maxAngle?: number;
+      speed?: number; // Add speed to settings
+    }
   ) => void;
 }
 
@@ -69,12 +75,14 @@ export default function ServoCardHybrid({
   onEditPins,
   sendMessage, // Destructure sendMessage
   initialPresets,
+  initialSpeed = 100, // Default to maximum speed
   onSettingsChange,
 }: ServoCardProps) {
   // Removed internal angle state: const [angle, setAngle] = useState(initialAngle);
   const [minAngle, setMinAngle] = useState(initialMinAngle);
   const [maxAngle, setMaxAngle] = useState(initialMaxAngle);
   const [targetAngleInput, setTargetAngleInput] = useState<string>("90"); // UI state for the input field, now string
+  const [speed, setSpeed] = useState<number>(initialSpeed); // Add speed state
 
   // States for string representation of min/max angle inputs
   const [minAngleInput, setMinAngleInput] = useState<string>(
@@ -115,7 +123,7 @@ export default function ServoCardHybrid({
 
     // Draw servo body
     ctx.fillStyle = "#e5e7eb"; // Tailwind gray-200
-    ctx.fillRect(centerX - 20, centerY - 10, 40, 20);
+    ctx.fillRect(centerX - 20, centerY, 40, 2);
 
     // Draw angle arc based on minAngle and maxAngle
     ctx.beginPath();
@@ -198,11 +206,11 @@ export default function ServoCardHybrid({
 
   const moveToAngle = (newAngle: number) => {
     // Apply limits locally for immediate UI feedback
-    let limitedAngle = newAngle;
-    if (limitedAngle < minAngle) limitedAngle = minAngle;
-    if (limitedAngle > maxAngle) limitedAngle = maxAngle;
+    const limitedAngle = Math.min(Math.max(newAngle, minAngle), maxAngle);
 
-    console.log(`[ServoCard ${id}] Sending setAngle: ${limitedAngle}`);
+    console.log(
+      `[ServoCard ${id}] Sending setAngle: ${limitedAngle}, speed: ${speed}`
+    );
 
     // Check if the servo is attached and show error if not
     try {
@@ -323,6 +331,34 @@ export default function ServoCardHybrid({
     }
   };
 
+  // Add function to update servo speed
+  const updateSpeed = (newSpeed: number) => {
+    // Validate and constrain speed
+    const validSpeed = Math.max(1, Math.min(100, newSpeed));
+    setSpeed(validSpeed);
+
+    console.log(`[ServoCard ${id}] Setting speed: ${validSpeed}`);
+
+    try {
+      // Send immediate control message to update the current speed
+      // This affects the servo's behavior right away
+      sendMessage({
+        action: "control",
+        componentGroup: "servos",
+        id: id,
+        speed: validSpeed,
+      });
+
+      // Update persistent settings in the parent component
+      // This ensures the speed is saved when the configuration is saved
+      if (onSettingsChange) {
+        onSettingsChange(id, { speed: validSpeed });
+      }
+    } catch (error) {
+      console.error(`[ServoCard ${id}] Error sending speed command:`, error);
+    }
+  };
+
   // Add an effect to listen for WebSocket events
   useEffect(() => {
     // Define a handler for the WebSocket message event
@@ -380,17 +416,12 @@ export default function ServoCardHybrid({
     <Card className="shadow-md">
       <CardHeader className="pb-2">
         <div className="flex justify-between items-center">
-          <div className="flex flex-col">
-            <CardTitle className="flex items-center">
-              {name}
-              <Badge variant="outline" className="ml-2">
-                {angle}°
-              </Badge>
-            </CardTitle>
-            <div className="flex mt-1 text-xs text-muted-foreground">
+          <CardTitle className="flex items-center">
+            {name}{" "}
+            <div className="flex mt-1 pl-2 text-xs text-muted-foreground">
               <Badge variant="outline">Control Pin: {pins.control}</Badge>
             </div>
-          </div>
+          </CardTitle>
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
@@ -498,8 +529,6 @@ export default function ServoCardHybrid({
                   value={targetAngleInput}
                   onChange={(e) => setTargetAngleInput(e.target.value)}
                   placeholder="Angle"
-                  // min={minAngle} // HTML5 min/max not as critical with text type + manual parsing
-                  // max={maxAngle}
                 />
                 <Button
                   onClick={() => {
@@ -511,6 +540,25 @@ export default function ServoCardHybrid({
                 >
                   Go
                 </Button>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between mb-1">
+                <Label htmlFor={`${id}-speed-slider`}>Movement Speed</Label>
+                <span className="text-sm font-medium">{speed}%</span>
+              </div>
+              <Slider
+                id={`${id}-speed-slider`}
+                value={[speed]}
+                min={1}
+                max={100}
+                step={1}
+                onValueChange={(value) => updateSpeed(value[0])}
+              />
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <span>Slow</span>
+                <span>Fast</span>
               </div>
             </div>
           </TabsContent>
@@ -613,8 +661,6 @@ export default function ServoCardHybrid({
                   type="text" // Use text to allow empty string
                   value={newPresetInput}
                   onChange={(e) => setNewPresetInput(e.target.value)}
-                  // min={minAngle} // HTML5 min/max not as critical with text type + manual parsing
-                  // max={maxAngle}
                   placeholder="New preset angle"
                 />
                 <Button variant="outline" size="icon" onClick={addPreset}>

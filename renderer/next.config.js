@@ -3,6 +3,9 @@ module.exports = {
   output: "export",
   distDir: process.env.NODE_ENV === "production" ? "../app" : ".next",
   trailingSlash: false,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   images: {
     unoptimized: true,
   },

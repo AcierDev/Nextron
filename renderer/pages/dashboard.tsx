@@ -71,6 +71,7 @@ type ServoMotorDisplay = {
     control: number;
   };
   initialPresets?: number[];
+  initialSpeed?: number;
 };
 
 type IOPinDisplay = {
@@ -179,6 +180,7 @@ export default function Dashboard() {
           maxAngle: servo.maxAngle ?? 180,
           pins: { control: servo.pins[0] },
           initialPresets: servoConfig.presets ?? [0, 45, 90, 135, 180],
+          initialSpeed: servoConfig.speed ?? 100,
         });
       });
 
@@ -796,6 +798,98 @@ export default function Dashboard() {
     });
   };
 
+  // Define sendServoConfiguration before handleServoSettingsChange
+  const sendServoConfiguration = useCallback(
+    (servoId: string, servoConfig: any) => {
+      // Find the servo in the hardware config
+      const servo = hardwareConfig.servos.find((s) => s.id === servoId);
+      if (!servo) return;
+
+      // Build configuration payload
+      const configPayload: any = {
+        id: servoId,
+        name: servo.name,
+        pin: servo.pins[0],
+      };
+
+      // Add properties with appropriate defaults
+      if (servoConfig.minAngle !== undefined) {
+        configPayload.minAngle = servoConfig.minAngle;
+      } else {
+        configPayload.minAngle = servo.minAngle || 0; // Default to 0 if not defined
+      }
+
+      if (servoConfig.maxAngle !== undefined) {
+        configPayload.maxAngle = servoConfig.maxAngle;
+      } else {
+        configPayload.maxAngle = servo.maxAngle || 180; // Default to 180 if not defined
+      }
+
+      // Only include speed if it was explicitly requested to be updated
+      // This prevents overriding individual servo speed settings
+      if (servoConfig.speed !== undefined) {
+        configPayload.speed = servoConfig.speed;
+      }
+
+      // Send configuration update
+      sendMessage({
+        action: "configure",
+        componentGroup: "servos",
+        config: configPayload,
+      });
+    },
+    [hardwareConfig, sendMessage]
+  );
+
+  // Now use it in handleServoSettingsChange
+  const handleServoSettingsChange = useCallback(
+    (
+      servoId: string,
+      newSettings: {
+        presets?: number[];
+        minAngle?: number;
+        maxAngle?: number;
+        speed?: number;
+      }
+    ) => {
+      // Update local state
+      setHardwareConfig((prevHwConfig) => {
+        const updatedServos = prevHwConfig.servos.map((servo) => {
+          if (servo.id === servoId) {
+            const updatedServo = { ...servo } as any; // Assert type for modification
+            if (newSettings.presets !== undefined) {
+              updatedServo.presets = newSettings.presets;
+            }
+            if (newSettings.minAngle !== undefined) {
+              updatedServo.minAngle = newSettings.minAngle;
+            }
+            if (newSettings.maxAngle !== undefined) {
+              updatedServo.maxAngle = newSettings.maxAngle;
+            }
+            if (newSettings.speed !== undefined) {
+              updatedServo.speed = newSettings.speed;
+            }
+            return updatedServo;
+          }
+          return servo;
+        });
+        return { ...prevHwConfig, servos: updatedServos };
+      });
+
+      // Don't send a second configuration message for speed changes
+      // as ServoCardHybrid already sends a control message directly
+      // For other settings, we should send a configuration update
+      if (
+        newSettings.minAngle !== undefined ||
+        newSettings.maxAngle !== undefined ||
+        newSettings.presets !== undefined
+      ) {
+        sendServoConfiguration(servoId, newSettings);
+      }
+    },
+    [setHardwareConfig, sendServoConfiguration]
+  );
+
   // NEW: Handler for live stepper settings changes from StepperCardDesign2
   const handleStepperSettingsChange = useCallback(
     (
@@ -846,39 +940,6 @@ export default function Dashboard() {
           return stepper;
         });
         return { ...prevHwConfig, steppers: updatedSteppers };
-      });
-    },
-    [setHardwareConfig]
-  );
-
-  // NEW: Handler for live servo settings changes from ServoCardHybrid
-  const handleServoSettingsChange = useCallback(
-    (
-      servoId: string,
-      newSettings: {
-        presets?: number[];
-        minAngle?: number;
-        maxAngle?: number;
-      }
-    ) => {
-      setHardwareConfig((prevHwConfig) => {
-        const updatedServos = prevHwConfig.servos.map((servo) => {
-          if (servo.id === servoId) {
-            const updatedServo = { ...servo } as any; // Assert type for modification
-            if (newSettings.presets !== undefined) {
-              updatedServo.presets = newSettings.presets;
-            }
-            if (newSettings.minAngle !== undefined) {
-              updatedServo.minAngle = newSettings.minAngle;
-            }
-            if (newSettings.maxAngle !== undefined) {
-              updatedServo.maxAngle = newSettings.maxAngle;
-            }
-            return updatedServo;
-          }
-          return servo;
-        });
-        return { ...prevHwConfig, servos: updatedServos };
       });
     },
     [setHardwareConfig]
@@ -1310,6 +1371,7 @@ export default function Dashboard() {
                     maxAngle={servoMotor.maxAngle}
                     pins={servoMotor.pins}
                     initialPresets={servoMotor.initialPresets}
+                    initialSpeed={servoMotor.initialSpeed}
                     onDelete={() => handleDeleteMotor(servoMotor.id)}
                     onDuplicate={() => handleDuplicateMotor(servoMotor)}
                     onEditPins={() => handleEditPins(servoMotor)}
@@ -1398,12 +1460,14 @@ export default function Dashboard() {
               minAngle: 0,
               maxAngle: 180,
               presets: [0, 45, 90, 135, 180], // Default presets
+              speed: 100, // Default speed (100%)
             } as any; // Asserting
 
             configPayload.pin = componentData.pins.control;
             configPayload.minAngle = (newComponent as any).minAngle;
             configPayload.maxAngle = (newComponent as any).maxAngle;
             configPayload.presets = (newComponent as any).presets;
+            configPayload.speed = (newComponent as any).speed;
           } else {
             // IO Pin
             componentGroup = "pins";

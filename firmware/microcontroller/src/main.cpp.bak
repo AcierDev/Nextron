@@ -1,0 +1,1271 @@
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <AsyncEventSource.h>
+#include <Bounce2.h>
+#include <ESP32Servo.h>
+#include <FastAccelStepper.h>
+#include <WiFi.h>
+
+#include <map>
+#include <memory>
+#include <vector>
+
+const char *ssid = "Everwood";
+const char *password = "Everwood-Staff";
+
+// FastAccelStepper engine setup
+FastAccelStepperEngine engine = FastAccelStepperEngine();
+
+// --- Pin Configuration ---
+enum PinPullMode { PULL_NONE = 0, PULL_UP = 1, PULL_DOWN = 2 };
+
+struct IoPinConfig {
+  String id;
+  String name;
+  uint8_t pin;
+  String pinType;  // "digital", "analog", or "pwm"
+  String mode;     // "input" or "output"
+  int lastValue;   // Last read or written value
+  PinPullMode pullMode;
+  uint16_t debounceMs;
+  Bounce *debouncer;  // Only used for digital inputs
+};
+
+// --- Servo Configuration (uses pointers safely) ---
+struct ServoConfig {
+  String id;
+  String name;
+  uint8_t pin;
+  Servo *servo = nullptr;
+  int minAngle = 0;
+  int maxAngle = 180;
+  bool isAttached = false;
+
+  // Add speed control variables
+  int speed = 100;        // Default speed (1-100)
+  int currentAngle = 90;  // Current angle position
+  int targetAngle = 90;   // Target angle to move to
+  unsigned long lastMoveTime =
+      0;  // Last time the servo was moved during gradual movement
+  bool isMoving = false;  // Whether the servo is currently in motion
+};
+
+// --- Stepper Configuration ---
+struct StepperConfig {
+  String id;
+  String name;
+  uint8_t pulPin;
+  uint8_t dirPin;
+  uint8_t enaPin = 0;  // Optional enable pin, 0 if not used
+  FastAccelStepper *stepper = nullptr;
+  long currentPosition = 0;
+  long targetPosition = 0;
+  float maxSpeed = 100000.0;     // Increased default max speed
+  float acceleration = 50000.0;  // Increased default acceleration
+  long minPosition = -50000;     // Min position limit
+  long maxPosition = 50000;      // Max position limit
+  float stepsPerInch = 200.0;    // For unit conversion
+  unsigned long lastPositionReportTime = 0;
+};
+
+std::vector<IoPinConfig> configuredPins;
+std::vector<ServoConfig> configuredServos;
+std::vector<StepperConfig> configuredSteppers;
+std::map<String, unsigned long> lastPinReadTime;
+const unsigned long analogInputReadInterval =
+    100;  // Only poll analog inputs at this interval
+const unsigned long stepperPositionReportInterval =
+    100;  // Report position every 100ms if changed
+
+// Forward declarations
+void sendStepperNotFoundError(AsyncWebSocketClient *client, const String &id);
+long clampPosition(StepperConfig *stepper, long position);
+
+// IP printing
+unsigned long ipPrintStopTime = 0;
+unsigned long lastIpPrintTime = 0;
+const unsigned long ipPrintDuration = 15000;
+const unsigned long ipPrintInterval = 1000;
+
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+IoPinConfig *findPinById(const String &id) {
+  for (auto &pinConfig : configuredPins) {
+    if (pinConfig.id == id) return &pinConfig;
+  }
+  return nullptr;
+}
+
+ServoConfig *findServoById(const String &id) {
+  for (auto &servoConfig : configuredServos) {
+    if (servoConfig.id == id) return &servoConfig;
+  }
+  return nullptr;
+}
+
+StepperConfig *findStepperById(const String &id) {
+  for (auto &stepper : configuredSteppers) {
+    if (stepper.id == id) {
+      return &stepper;
+    }
+  }
+  return nullptr;
+}
+
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      Serial.printf("WebSocket client #%u connected from %s\n", client->id(),
+                    client->remoteIP().toString().c_str());
+      break;
+
+    case WS_EVT_DISCONNECT:
+      Serial.printf("WebSocket client #%u disconnected\n", client->id());
+      break;
+
+    case WS_EVT_DATA: {
+      AwsFrameInfo *info = (AwsFrameInfo *)arg;
+      if (info->final && info->index == 0 && info->len == len &&
+          info->opcode == WS_TEXT) {
+        data[len] = 0;
+        Serial.printf("Received WS [%u]: %s\n", client->id(), (char *)data);
+
+        StaticJsonDocument<512> doc;
+        DeserializationError error = deserializeJson(doc, (char *)data);
+        if (error) {
+          client->text("ERROR: Invalid JSON");
+          return;
+        }
+
+        // Debug: Print received message to Serial
+        Serial.println("Received JSON message:");
+        serializeJsonPretty(doc, Serial);
+        Serial.println();
+
+        const char *action = doc["action"];
+        const char *group = doc["componentGroup"];
+
+        if (!action) {
+          client->text("ERROR: Missing action field");
+          return;
+        }
+
+        if (!group) {
+          client->text("ERROR: Missing componentGroup field");
+          return;
+        }
+
+        Serial.printf("Processing action: %s for group: %s\n", action, group);
+
+        // Handle ping action for keep-alive
+        if (strcmp(action, "ping") == 0) {
+          StaticJsonDocument<128> response;
+          response["status"] = "OK";
+          response["action"] = "pong";
+          response["componentGroup"] = group;
+
+          String jsonResponse;
+          serializeJson(response, jsonResponse);
+          client->text(jsonResponse);
+          return;
+        }
+
+        if (strcmp(group, "pins") == 0) {
+          if (strcmp(action, "configure") == 0) {
+            JsonObject config = doc["config"];
+            String id = config["id"];
+            String name = config["name"];
+            uint8_t pin = config["pin"];
+            String mode = config["mode"] | "output";
+            String pinType = config["pinType"] | "digital";
+            PinPullMode pullMode =
+                static_cast<PinPullMode>(config["pullMode"] | 0);
+            uint16_t debounceMs = config["debounceMs"] | 0;
+
+            if (id.isEmpty() || name.isEmpty()) {
+              client->text("ERROR: Missing required config fields for pin");
+              return;
+            }
+
+            // Look for existing pin config
+            IoPinConfig *existingPin = findPinById(id);
+
+            // Clean up existing pin if needed
+            if (existingPin) {
+              // Clean up existing debouncer
+              if (existingPin->debouncer) {
+                delete existingPin->debouncer;
+                existingPin->debouncer = nullptr;
+              }
+
+              // Reset pin to safe state
+              if (existingPin->pinType == "pwm") {
+                ledcDetachPin(existingPin->pin);
+              }
+            }
+
+            // Setup pin based on mode and type
+            if (mode == "output") {
+              if (pinType == "digital") {
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, LOW);
+              } else if (pinType == "pwm") {
+                // Configure PWM for ESP32
+                ledcSetup(pin % 16, 5000, 8);  // Channel, frequency, resolution
+                ledcAttachPin(pin, pin % 16);
+                ledcWrite(pin % 16, 0);
+              }
+              // For analog output, we use DAC which will be handled during
+              // write operations
+            } else {
+              // Input mode with appropriate pull resistors
+              if (pinType == "digital") {
+                if (pullMode == PULL_UP) {
+                  pinMode(pin, INPUT_PULLUP);
+                } else if (pullMode == PULL_DOWN) {
+                  pinMode(pin, INPUT_PULLDOWN);
+                } else {
+                  pinMode(pin, INPUT);
+                }
+              } else {
+                // Analog input - set pin appropriately
+                pinMode(pin, INPUT);
+              }
+            }
+
+            // Store the configuration
+            if (existingPin) {
+              existingPin->name = name;
+              existingPin->pin = pin;
+              existingPin->mode = mode;
+              existingPin->pinType = pinType;
+              existingPin->lastValue = -1;
+              existingPin->pullMode = pullMode;
+              existingPin->debounceMs = debounceMs;
+
+              // Setup debouncer for digital inputs
+              if (mode == "input" && pinType == "digital" && debounceMs > 0) {
+                existingPin->debouncer = new Bounce();
+                existingPin->debouncer->attach(pin);
+                existingPin->debouncer->interval(debounceMs);
+              }
+            } else {
+              IoPinConfig newPin = {id, name,     pin,        pinType, mode,
+                                    -1, pullMode, debounceMs, nullptr};
+
+              // Setup debouncer for digital inputs
+              if (mode == "input" && pinType == "digital" && debounceMs > 0) {
+                newPin.debouncer = new Bounce();
+                newPin.debouncer->attach(pin);
+                newPin.debouncer->interval(debounceMs);
+              }
+
+              configuredPins.push_back(newPin);
+            }
+
+            // Send success response
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["message"] = "Pin configured";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "readPin") == 0) {
+            // Handle manual pin reading
+            String id = doc["id"];
+            IoPinConfig *pinToRead = findPinById(id);
+
+            if (!pinToRead) {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            if (pinToRead->mode != "input") {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin is not configured as input";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            int value = 0;
+            if (pinToRead->pinType == "digital") {
+              value = digitalRead(pinToRead->pin);
+            } else if (pinToRead->pinType == "analog") {
+              value = analogRead(pinToRead->pin);
+            }
+
+            pinToRead->lastValue = value;
+
+            // Send back the read value
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["id"] = pinToRead->id;
+            response["value"] = value;
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "writePin") == 0) {
+            // Handle pin value updates
+            String id = doc["id"];
+            int value = doc["value"];
+            String type = doc["type"] | "digital";
+
+            IoPinConfig *pinToWrite = findPinById(id);
+
+            if (!pinToWrite) {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            if (pinToWrite->mode != "output") {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Pin is not configured as output";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            // Update pin based on type
+            if (type == "digital") {
+              digitalWrite(pinToWrite->pin, value ? HIGH : LOW);
+            } else if (type == "pwm") {
+              ledcWrite(pinToWrite->pin % 16, value);
+            } else if (type == "analog") {
+              if (pinToWrite->pin == 25 || pinToWrite->pin == 26) {
+                // These are the DAC pins on ESP32
+                dacWrite(pinToWrite->pin, value > 255 ? 255 : value);
+              } else {
+                StaticJsonDocument<128> response;
+                response["status"] = "ERROR";
+                response["message"] = "Pin does not support analog output";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+                return;
+              }
+            }
+
+            pinToWrite->lastValue = value;
+
+            StaticJsonDocument<128> response;
+            response["status"] = "OK";
+            response["message"] = "Pin value updated";
+            response["id"] = pinToWrite->id;
+            response["value"] = value;
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "remove") == 0) {
+            String id = doc["id"];
+            bool pinFound = false;
+
+            for (auto it = configuredPins.begin(); it != configuredPins.end();
+                 ++it) {
+              if (it->id == id) {
+                // Clean up the pin
+                if (it->pinType == "pwm") {
+                  ledcDetachPin(it->pin);
+                } else {
+                  pinMode(it->pin, INPUT);  // Reset to safe state
+                }
+
+                // Clean up debouncer
+                if (it->debouncer) {
+                  delete it->debouncer;
+                  it->debouncer = nullptr;
+                }
+
+                configuredPins.erase(it);
+                lastPinReadTime.erase(id);
+                pinFound = true;
+                break;
+              }
+            }
+
+            StaticJsonDocument<128> response;
+            if (pinFound) {
+              response["status"] = "OK";
+              response["message"] = "Pin removed";
+            } else {
+              response["status"] = "ERROR";
+              response["message"] = "Pin not found";
+            }
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+          }
+        }
+
+        else if (strcmp(group, "servos") == 0) {
+          if (strcmp(action, "configure") == 0) {
+            JsonObject config = doc["config"];
+            String id = config["id"];
+            String name = config["name"];
+            uint8_t pin = config["pin"];
+
+            int minAngle = config["minAngle"] | 0;
+            int maxAngle = config["maxAngle"] | 180;
+
+            // Check if speed is explicitly provided in the config
+            bool hasSpeedConfig = config.containsKey("speed");
+            int speed = hasSpeedConfig ? config["speed"].as<int>() : 100;
+
+            if (id.isEmpty() || name.isEmpty()) {
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Missing required config fields for servo";
+              response["componentGroup"] = "servos";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            ServoConfig *existingServo = findServoById(id);
+            if (existingServo) {
+              if (existingServo->pin != pin) {
+                if (existingServo->isAttached) existingServo->servo->detach();
+                existingServo->servo->attach(pin);
+                existingServo->pin = pin;
+                existingServo->isAttached = true;
+              } else if (!existingServo->isAttached) {
+                existingServo->servo->attach(pin);
+                existingServo->isAttached = true;
+              }
+              existingServo->name = name;
+              existingServo->minAngle = minAngle;
+              existingServo->maxAngle = maxAngle;
+
+              // Only update speed if explicitly provided
+              if (hasSpeedConfig) {
+                existingServo->speed = constrain(speed, 1, 100);
+              }
+            } else {
+              Servo *newServo = new Servo();
+              newServo->attach(pin);
+              ServoConfig newConfig;
+              newConfig.id = id;
+              newConfig.name = name;
+              newConfig.pin = pin;
+              newConfig.servo = newServo;
+              newConfig.minAngle = minAngle;
+              newConfig.maxAngle = maxAngle;
+              newConfig.speed = constrain(speed, 1, 100);
+              newConfig.isAttached = true;
+              newConfig.currentAngle = 90;  // Initialize at center position
+              newConfig.targetAngle = 90;
+              configuredServos.push_back(newConfig);
+            }
+
+            // Send successful configuration response
+            StaticJsonDocument<256> response;
+            response["status"] = "OK";
+            response["message"] = "Servo configured";
+            response["id"] = id;
+            response["pin"] = pin;
+            response["minAngle"] = minAngle;
+            response["maxAngle"] = maxAngle;
+            response["speed"] = existingServo ? existingServo->speed : speed;
+            response["componentGroup"] = "servos";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "control") == 0) {
+            String id = doc["id"];
+            ServoConfig *servo = findServoById(id);
+            if (!servo) {
+              client->text("ERROR: Servo not found");
+              return;
+            }
+
+            // Handle speed setting command
+            if (doc.containsKey("speed")) {
+              int speed = doc["speed"];
+              speed = constrain(speed, 1, 100);  // Constrain to valid range
+              servo->speed = speed;
+
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["id"] = servo->id;
+              response["speed"] = speed;
+              response["componentGroup"] = "servos";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+              return;
+            }
+
+            if (doc.containsKey("angle")) {
+              int angle = doc["angle"];
+              angle = constrain(angle, servo->minAngle, servo->maxAngle);
+
+              if (!servo->isAttached) {
+                servo->servo->attach(servo->pin);
+                servo->isAttached = true;
+              }
+
+              // Set up for gradual movement
+              servo->targetAngle = angle;
+              servo->isMoving = true;
+
+              // If immediate mode is requested or speed is max, move
+              // immediately
+              bool immediate = doc["immediate"] | false;
+              if (immediate || servo->speed >= 100) {
+                servo->currentAngle = angle;
+                servo->servo->write(angle);
+                servo->isMoving = false;
+              }
+
+              // Send back confirmation with the correct componentGroup
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["id"] = servo->id;
+              response["targetAngle"] = angle;
+              response["currentAngle"] = servo->currentAngle;
+              response["componentGroup"] = "servos";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            } else if (doc.containsKey("command")) {
+              String cmd = doc["command"];
+              if (cmd == "attach" && !servo->isAttached) {
+                servo->servo->attach(servo->pin);
+                servo->isAttached = true;
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["message"] = "Servo attached";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else if (cmd == "detach" && servo->isAttached) {
+                servo->servo->detach();
+                servo->isAttached = false;
+                servo->isMoving = false;  // Stop any ongoing movement
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["message"] = "Servo detached";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else if (cmd == "reset") {
+                int angle = constrain(90, servo->minAngle, servo->maxAngle);
+
+                if (!servo->isAttached) {
+                  servo->servo->attach(servo->pin);
+                  servo->isAttached = true;
+                }
+
+                // Set up for gradual movement to home position
+                servo->targetAngle = angle;
+                servo->isMoving = true;
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["targetAngle"] = angle;
+                response["currentAngle"] = servo->currentAngle;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else if (cmd == "setAngle") {
+                // Handle setAngle with support for speed
+                int angle = doc["value"];
+                angle = constrain(angle, servo->minAngle, servo->maxAngle);
+
+                if (!servo->isAttached) {
+                  servo->servo->attach(servo->pin);
+                  servo->isAttached = true;
+                }
+
+                // Set up for gradual movement
+                servo->targetAngle = angle;
+                servo->isMoving = true;
+
+                // If immediate mode is requested or speed is max, move
+                // immediately
+                bool immediate = doc["immediate"] | false;
+                if (immediate || servo->speed >= 100) {
+                  servo->currentAngle = angle;
+                  servo->servo->write(angle);
+                  servo->isMoving = false;
+                }
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["targetAngle"] = angle;
+                response["currentAngle"] = servo->currentAngle;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else if (cmd == "stop") {
+                // New command to stop servo movement
+                servo->isMoving = false;
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["id"] = servo->id;
+                response["message"] = "Servo movement stopped";
+                response["angle"] =
+                    servo->currentAngle;  // Report current position
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              } else {
+                StaticJsonDocument<128> response;
+                response["status"] = "ERROR";
+                response["message"] = "Unknown command";
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              }
+            }
+
+          } else if (strcmp(action, "remove") == 0) {
+            String id = doc["id"];
+            for (auto it = configuredServos.begin();
+                 it != configuredServos.end(); ++it) {
+              if (it->id == id) {
+                if (it->isAttached) it->servo->detach();
+                delete it->servo;
+                configuredServos.erase(it);
+
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Servo removed";
+                response["id"] = id;
+                response["componentGroup"] = "servos";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+                return;
+              }
+            }
+
+            StaticJsonDocument<128> response;
+            response["status"] = "ERROR";
+            response["message"] = "Servo not found";
+            response["componentGroup"] = "servos";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+          }
+        }
+
+        else if (strcmp(group, "steppers") == 0) {
+          if (strcmp(action, "configure") == 0) {
+            JsonObject config = doc["config"];
+            String id = config["id"];
+            String name = config["name"];
+            uint8_t pulPin = config["pulPin"];
+            uint8_t dirPin = config["dirPin"];
+            uint8_t enaPin = config["enaPin"] | 0;  // Optional enable pin
+
+            if (id.isEmpty() || name.isEmpty() || pulPin == 0 || dirPin == 0) {
+              client->text(
+                  "ERROR: Missing required config fields for stepper (id, "
+                  "name, pulPin, dirPin)");
+              return;
+            }
+
+            long minPosition = config["minPosition"] | -50000;
+            long maxPosition = config["maxPosition"] | 50000;
+            float stepsPerInch = config["stepsPerInch"] | 200.0;
+
+            StepperConfig *existingStepper = findStepperById(id);
+            if (existingStepper) {
+              Serial.printf("Updating stepper ID %s (%s)\n", id.c_str(),
+                            name.c_str());
+              existingStepper->name = name;
+              existingStepper->minPosition = minPosition;
+              existingStepper->maxPosition = maxPosition;
+              existingStepper->stepsPerInch = stepsPerInch;
+              // Pin configuration can't be updated once stepper is created
+            } else {
+              Serial.printf(
+                  "Adding stepper ID %s (%s) on PUL %d, DIR %d, ENA %d\n",
+                  id.c_str(), name.c_str(), pulPin, dirPin, enaPin);
+              StepperConfig newConfig;
+              newConfig.id = id;
+              newConfig.name = name;
+              newConfig.pulPin = pulPin;
+              newConfig.dirPin = dirPin;
+              newConfig.enaPin = enaPin;
+              newConfig.minPosition = minPosition;
+              newConfig.maxPosition = maxPosition;
+              newConfig.stepsPerInch = stepsPerInch;
+
+              // Create FastAccelStepper instance
+              newConfig.stepper = engine.stepperConnectToPin(pulPin);
+              if (newConfig.stepper) {
+                newConfig.stepper->setDirectionPin(dirPin);
+
+                // Add enable pin if specified
+                if (enaPin > 0) {
+                  newConfig.stepper->setEnablePin(enaPin);
+                  newConfig.stepper->setAutoEnable(true);
+                } else {
+                  // With no enable pin, make sure auto-enable is off
+                  newConfig.stepper->setAutoEnable(false);
+                }
+
+                // Set initial parameters
+                newConfig.stepper->setSpeedInHz(
+                    newConfig.maxSpeed);  // Hz instead of steps/second
+                newConfig.stepper->setAcceleration(newConfig.acceleration);
+
+                configuredSteppers.push_back(newConfig);
+              } else {
+                client->text("ERROR: Failed to create stepper on pin");
+                return;
+              }
+            }
+
+            // Send back proper JSON response
+            StaticJsonDocument<256> response;
+            response["status"] = "OK";
+            response["message"] = "Stepper configured";
+            response["id"] = id;
+            response["minPosition"] = minPosition;
+            response["maxPosition"] = maxPosition;
+            response["stepsPerInch"] = stepsPerInch;
+            response["componentGroup"] = "steppers";
+
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            client->text(jsonResponse);
+
+          } else if (strcmp(action, "control") == 0) {
+            String id = doc["id"];
+            StepperConfig *stepper = findStepperById(id);
+            if (!stepper || !stepper->stepper) {
+              sendStepperNotFoundError(client, id);
+              return;
+            }
+
+            const char *command = doc["command"];
+            if (!command) {
+              client->text("ERROR: Missing 'command' for stepper control");
+              return;
+            }
+
+            // Process setParams command (replaces setConfig)
+            if (strcmp(command, "setParams") == 0) {
+              if (doc.containsKey("speed")) {
+                float speed = doc["speed"].as<float>();
+                // Store the requested speed value
+                stepper->maxSpeed = speed;
+                // Set the speed in Hz (steps per second)
+                stepper->stepper->setSpeedInHz(speed);
+
+                // Remove auto-enable check since we now support much higher
+                // speeds
+                Serial.printf("Stepper %s: Set speed to %.2f Hz\n", id.c_str(),
+                              speed);
+              }
+              if (doc.containsKey("acceleration")) {
+                float accel = doc["acceleration"].as<float>();
+                stepper->stepper->setAcceleration(accel);
+                stepper->acceleration = accel;
+
+                Serial.printf("Stepper %s: Set acceleration to %.2f steps/s²\n",
+                              id.c_str(), accel);
+              }
+              if (doc.containsKey("minPosition")) {
+                stepper->minPosition = doc["minPosition"].as<long>();
+                Serial.printf("Stepper %s: Set min position to %ld\n",
+                              id.c_str(), stepper->minPosition);
+              }
+              if (doc.containsKey("maxPosition")) {
+                stepper->maxPosition = doc["maxPosition"].as<long>();
+                Serial.printf("Stepper %s: Set max position to %ld\n",
+                              id.c_str(), stepper->maxPosition);
+              }
+              if (doc.containsKey("stepsPerInch")) {
+                stepper->stepsPerInch = doc["stepsPerInch"].as<float>();
+                Serial.printf("Stepper %s: Set steps per inch to %.2f\n",
+                              id.c_str(), stepper->stepsPerInch);
+              }
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Stepper parameters updated";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Process move command for absolute positioning
+            else if (strcmp(command, "move") == 0) {
+              if (doc.containsKey("value")) {
+                long targetPos = doc["value"].as<long>();
+
+                // Apply position limits using helper function
+                targetPos = clampPosition(stepper, targetPos);
+
+                // Set the move
+                stepper->stepper->moveTo(targetPos);
+                stepper->targetPosition = targetPos;
+
+                Serial.printf(
+                    "Stepper %s: Moving to absolute %ld (speed=%.2f, "
+                    "accel=%.2f)\n",
+                    id.c_str(), targetPos, stepper->maxSpeed,
+                    stepper->acceleration);
+
+                // Send response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Moving to position";
+                response["id"] = stepper->id;
+                response["position"] = targetPos;
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              }
+            }
+            // Process step command for relative positioning
+            else if (strcmp(command, "step") == 0) {
+              if (doc.containsKey("value")) {
+                long steps = doc["value"].as<long>();
+
+                // Get current position first
+                long currentPos = stepper->stepper->getCurrentPosition();
+                long newPos = currentPos + steps;
+
+                // Apply position limits using helper function
+                newPos = clampPosition(stepper, newPos);
+
+                // Recalculate steps based on limits
+                steps = newPos - currentPos;
+
+                // Move if steps is not zero (avoid unnecessary commands)
+                if (steps != 0) {
+                  stepper->stepper->move(steps);
+                  stepper->targetPosition = newPos;
+
+                  Serial.printf(
+                      "Stepper %s: Stepping %ld steps to %ld (speed=%.2f, "
+                      "accel=%.2f)\n",
+                      id.c_str(), steps, newPos, stepper->maxSpeed,
+                      stepper->acceleration);
+                }
+
+                // Send response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Step command processed";
+                response["id"] = stepper->id;
+                response["steps"] = steps;
+                response["position"] =
+                    newPos;  // Add the target position to the response
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+              }
+            }
+            // Process home command to return to center position
+            else if (strcmp(command, "home") == 0) {
+              // Calculate "home" position as middle of range
+              long homePos = (stepper->minPosition + stepper->maxPosition) / 2;
+
+              // Move to home position
+              stepper->stepper->moveTo(homePos);
+              stepper->targetPosition = homePos;
+
+              Serial.printf(
+                  "Stepper %s: Homing to position %ld (speed=%.2f, "
+                  "accel=%.2f)\n",
+                  id.c_str(), homePos, stepper->maxSpeed,
+                  stepper->acceleration);
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Homing stepper";
+              response["id"] = stepper->id;
+              response["position"] = homePos;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Process emergency stop command
+            else if (strcmp(command, "stop") == 0) {
+              stepper->stepper->forceStop();
+
+              Serial.printf("Stepper %s: Emergency stop issued\n", id.c_str());
+
+              // Send response
+              StaticJsonDocument<128> response;
+              response["status"] = "OK";
+              response["message"] = "Stepper stopped";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+            // Handle unknown command
+            else {
+              // Send error response
+              StaticJsonDocument<128> response;
+              response["status"] = "ERROR";
+              response["message"] = "Unknown stepper command";
+              response["id"] = stepper->id;
+              response["componentGroup"] = "steppers";
+
+              String jsonResponse;
+              serializeJson(response, jsonResponse);
+              client->text(jsonResponse);
+            }
+
+          } else if (strcmp(action, "remove") == 0) {
+            String id = doc["id"];
+            for (auto it = configuredSteppers.begin();
+                 it != configuredSteppers.end(); ++it) {
+              if (it->id == id) {
+                Serial.printf("Removing stepper ID %s\n", id.c_str());
+                if (it->stepper) {
+                  it->stepper->forceStop();  // Stop before removing
+                }
+                // FastAccelStepper is managed by the engine, no need to delete
+                configuredSteppers.erase(it);
+
+                // Send JSON response
+                StaticJsonDocument<128> response;
+                response["status"] = "OK";
+                response["message"] = "Stepper removed";
+                response["id"] = id;
+                response["componentGroup"] = "steppers";
+
+                String jsonResponse;
+                serializeJson(response, jsonResponse);
+                client->text(jsonResponse);
+                break;
+              }
+            }
+
+            // If we got here without sending a response, stepper wasn't found
+            if (client->status() == WS_CONNECTED) {
+              sendStepperNotFoundError(client, id);
+            }
+          }
+        }
+
+        else {
+          // Handle other groups or unknown
+          Serial.printf("Received unhandled group: %s\n", group);
+          client->text("ERROR: Unhandled component group");
+        }
+      }
+      break;
+    }
+
+    case WS_EVT_PONG:
+      Serial.printf("WebSocket PONG received from #%u\n", client->id());
+      break;
+
+    case WS_EVT_ERROR:
+      Serial.printf("WebSocket client #%u error #%u: %s\n", client->id(),
+                    *((uint16_t *)arg), (char *)data);
+      break;
+  }
+}
+
+// Add a helper function for servo movement updates (put this before the setup()
+// function)
+void updateServoMovements() {
+  unsigned long currentTime = millis();
+
+  for (auto &servoConfig : configuredServos) {
+    if (servoConfig.isAttached && servoConfig.isMoving) {
+      // Skip if we haven't waited long enough for the next movement
+      int delayBetweenSteps = map(servoConfig.speed, 1, 100, 50,
+                                  0);  // Map speed 1-100 to delay 50-0ms
+      if (currentTime - servoConfig.lastMoveTime < delayBetweenSteps) {
+        continue;
+      }
+
+      // Calculate next position based on speed
+      int step = (servoConfig.targetAngle > servoConfig.currentAngle) ? 1 : -1;
+      int stepsToMove = map(servoConfig.speed, 1, 100, 1,
+                            5);  // Higher speeds move more degrees at once
+
+      // Limit steps to reach exactly the target
+      int remaining = abs(servoConfig.targetAngle - servoConfig.currentAngle);
+      stepsToMove = min(stepsToMove, remaining);
+
+      if (stepsToMove > 0) {
+        // Move the servo by calculated steps
+        servoConfig.currentAngle += step * stepsToMove;
+        servoConfig.servo->write(servoConfig.currentAngle);
+        servoConfig.lastMoveTime = currentTime;
+
+        // Broadcast the position update
+        StaticJsonDocument<128> updateDoc;
+        updateDoc["id"] = servoConfig.id;
+        updateDoc["angle"] = servoConfig.currentAngle;
+        updateDoc["componentGroup"] = "servos";
+
+        String output;
+        serializeJson(updateDoc, output);
+        ws.textAll(output);
+      } else {
+        // We've reached the target
+        servoConfig.isMoving = false;
+
+        // Send a final update with status
+        StaticJsonDocument<128> updateDoc;
+        updateDoc["id"] = servoConfig.id;
+        updateDoc["angle"] = servoConfig.currentAngle;
+        updateDoc["status"] = "COMPLETE";
+        updateDoc["componentGroup"] = "servos";
+
+        String output;
+        serializeJson(updateDoc, output);
+        ws.textAll(output);
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  // Initialize FastAccelStepper engine
+  engine.init();
+
+  Serial.print("IP_READY:");
+  Serial.println(WiFi.localIP());
+
+  ipPrintStopTime = millis() + ipPrintDuration;
+  lastIpPrintTime = millis();
+
+  ws.onEvent(onWebSocketEvent);
+  server.addHandler(&ws);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  ws.cleanupClients();
+
+  unsigned long now = millis();
+  if (ipPrintStopTime && now < ipPrintStopTime &&
+      now - lastIpPrintTime >= ipPrintInterval) {
+    Serial.print("IP_READY:");
+    Serial.println(WiFi.localIP());
+    lastIpPrintTime = now;
+  }
+
+  // Update servo movements for gradual speed control
+  updateServoMovements();
+
+  // Check and update input pins
+  for (auto &pin : configuredPins) {
+    if (pin.mode == "input") {
+      bool shouldUpdate = false;
+      int currentValue = 0;
+
+      if (pin.pinType == "digital") {
+        if (pin.debouncer) {
+          // Use debouncer for digital inputs with debouncing enabled
+          pin.debouncer->update();
+          if (pin.debouncer->changed()) {
+            currentValue = pin.debouncer->read();
+            shouldUpdate = true;
+          }
+        } else {
+          // Regular digital read for non-debounced pins
+          currentValue = digitalRead(pin.pin);
+          if (currentValue != pin.lastValue) {
+            shouldUpdate = true;
+          }
+        }
+      } else if (pin.pinType == "analog") {
+        // Only read analog values at specified intervals
+        if (now - lastPinReadTime[pin.id] >= analogInputReadInterval) {
+          lastPinReadTime[pin.id] = now;
+          currentValue = analogRead(pin.pin);
+
+          // For analog, only update if value changed by more than 1%
+          int threshold = 10;  // About 1% of 1023
+          if (abs(currentValue - pin.lastValue) > threshold) {
+            shouldUpdate = true;
+          }
+        }
+      }
+
+      if (shouldUpdate) {
+        pin.lastValue = currentValue;
+
+        // Send update to all websocket clients
+        StaticJsonDocument<128> msg;
+        msg["id"] = pin.id;
+        msg["value"] = currentValue;
+        msg["type"] = pin.pinType;
+        msg["mode"] = pin.mode;
+
+        String out;
+        serializeJson(msg, out);
+        ws.textAll(out);
+      }
+    }
+  }
+
+  // --- Run Steppers ---
+  for (auto &stepperConfig : configuredSteppers) {
+    if (stepperConfig.stepper) {
+      unsigned long now = millis();
+
+      // FastAccelStepper doesn't need a run() call in the loop
+
+      // Check and report position periodically
+      if (now - stepperConfig.lastPositionReportTime >=
+          stepperPositionReportInterval) {
+        long currentPos = stepperConfig.stepper->getCurrentPosition();
+        if (currentPos != stepperConfig.currentPosition) {
+          stepperConfig.currentPosition = currentPos;
+          stepperConfig.lastPositionReportTime = now;
+
+          StaticJsonDocument<128> updateDoc;
+          updateDoc["id"] = stepperConfig.id;
+          updateDoc["position"] = currentPos;
+          updateDoc["componentGroup"] = "steppers";
+
+          String output;
+          serializeJson(updateDoc, output);
+          ws.textAll(output);
+
+          Serial.printf(
+              "Stepper %s: Position update sent: %ld steps (%.2f inches)\n",
+              stepperConfig.id.c_str(), currentPos,
+              currentPos / stepperConfig.stepsPerInch);
+        }
+      }
+    }
+  }
+
+  // --- Track Servo Positions ---
+  // Add servo position tracking to the main loop
+  static unsigned long lastServoUpdateTime = 0;
+  static const unsigned long servoUpdateInterval = 2000;  // 2 second interval
+
+  unsigned long currentTime = millis();
+  if (currentTime - lastServoUpdateTime >= servoUpdateInterval) {
+    lastServoUpdateTime = currentTime;
+
+    // Report positions of all active servos
+    for (auto &servoConfig : configuredServos) {
+      if (servoConfig.isAttached) {
+        // Use the stored currentAngle value instead of reading from the servo
+        int currentAngle = servoConfig.currentAngle;
+
+        // Simply send periodic updates - no need to track last reported value
+        // since we're already tracking the currentAngle in the servo config
+        StaticJsonDocument<128> updateDoc;
+        updateDoc["id"] = servoConfig.id;
+        updateDoc["angle"] = currentAngle;
+        updateDoc["componentGroup"] = "servos";
+
+        String output;
+        serializeJson(updateDoc, output);
+        ws.textAll(output);
+
+        Serial.printf("Servo %s: Position update sent: %d degrees\n",
+                      servoConfig.id.c_str(), currentAngle);
+      }
+    }
+  }
+
+  delay(1);  // Small delay is okay, FastAccelStepper uses hardware timers
+}
+
+// Send JSON error message for when a stepper is not found
+void sendStepperNotFoundError(AsyncWebSocketClient *client, const String &id) {
+  StaticJsonDocument<128> response;
+  response["status"] = "ERROR";
+  response["message"] = "Stepper not found or not initialized";
+  response["id"] = id;
+  response["componentGroup"] = "steppers";
+
+  String jsonResponse;
+  serializeJson(response, jsonResponse);
+  client->text(jsonResponse);
+}
+
+// Helper to clamp a position within the stepper's limits
+long clampPosition(StepperConfig *stepper, long position) {
+  if (position < stepper->minPosition) return stepper->minPosition;
+  if (position > stepper->maxPosition) return stepper->maxPosition;
+  return position;
+}
