@@ -632,6 +632,38 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     } else if (strcmp(command, "stop") == 0) {
       stepper->stepper->forceStop();
       client->text(String(F("OK: Stepper ")) + id + F(" emergency stop"));
+    } else if (strcmp(command, "setCurrentPosition") == 0) {
+      if (doc.containsKey("value")) {
+        long newPosition = doc["value"].as<long>();
+        stepper->stepper->setCurrentPosition(newPosition);
+        // Also update our tracked positions to match the new logical position
+        stepper->currentPosition = newPosition;
+        stepper->targetPosition = newPosition;
+        stepper->isActionPending =
+            false;  // Ensure any pending action is cleared
+        stepper->pendingCommandId = "";
+
+        // Send confirmation response
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer),
+                 "OK: Stepper %s current position set to %ld", id.c_str(),
+                 newPosition);
+        client->text(buffer);
+        Serial.printf("%s\n", buffer);
+
+        // Send an immediate position update to UI
+        StaticJsonDocument<128> updateDoc;
+        updateDoc["id"] = stepper->id;
+        updateDoc["position"] = newPosition;
+        updateDoc["componentGroup"] = F("steppers");
+        String output;
+        serializeJson(updateDoc, output);
+        ws.textAll(output);
+
+      } else {
+        client->text(
+            F("ERROR: Missing 'value' for setCurrentPosition command"));
+      }
     } else {
       client->text(F("ERROR: Unknown stepper command"));
     }

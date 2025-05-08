@@ -16,6 +16,7 @@ import {
   Trash2,
   Copy,
   Edit,
+  Target,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -269,13 +270,32 @@ export default function StepperCardDesign2({
   };
 
   const moveToHome = () => {
-    console.log(`[StepperCard ${id}] Sending home command`);
+    console.log(
+      `[StepperCard ${id}] Sending home command (move to predefined home)`
+    );
     sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
-      command: "home",
+      command: "home", // This command tells firmware to move to its defined home position
     });
+  };
+
+  // New function to set the current physical position as the logical zero
+  const setCurrentPositionAsHome = () => {
+    console.log(
+      `[StepperCard ${id}] Setting current position (${position}) as new home (0)`
+    );
+    sendMessage({
+      action: "control",
+      componentGroup: "steppers",
+      id: id,
+      command: "setCurrentPosition", // New command for firmware
+      value: 0, // Set the current physical position to logical 0
+    });
+    // Optionally, you might want to also update the targetMoveValue locally
+    // setTargetMoveValue("0");
+    // Or even force a state update if position prop doesn't update immediately
   };
 
   const moveSteps = (steps: number) => {
@@ -387,10 +407,10 @@ export default function StepperCardDesign2({
             <Button
               variant="ghost"
               size="icon"
-              onClick={moveToHome}
-              title="Home"
+              onClick={setCurrentPositionAsHome}
+              title="Set Current Position as Home (0)"
             >
-              <Home className="h-4 w-4" />
+              <Target className="h-4 w-4" />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -446,23 +466,34 @@ export default function StepperCardDesign2({
           </span>
         </div>
 
-        {/* Hold Buttons */}
-        <div className="flex space-x-2">
+        {/* Hold Buttons and Center Home Button */}
+        <div className="flex space-x-2 items-center">
           <Button
             variant="outline"
             className="flex-1 flex items-center justify-center"
             onMouseDown={() => setIsMovingLeft(true)}
             onMouseUp={() => setIsMovingLeft(false)}
-            onMouseLeave={() => setIsMovingLeft(false)} // Stop if mouse leaves button while pressed
+            onMouseLeave={() => setIsMovingLeft(false)}
             onTouchStart={(e) => {
               e.preventDefault();
               setIsMovingLeft(true);
-            }} // Prevent scrolling on touch
+            }}
             onTouchEnd={() => setIsMovingLeft(false)}
           >
             <ArrowLeft className="h-4 w-4 mr-1" />
             Hold Left
           </Button>
+
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={moveToHome}
+            title="Go to Home Position"
+            className="flex-shrink-0"
+          >
+            <Home className="h-4 w-4" />
+          </Button>
+
           <Button
             variant="outline"
             className="flex-1 flex items-center justify-center"
@@ -565,8 +596,8 @@ export default function StepperCardDesign2({
                 min={100}
                 max={100000}
                 step={100}
-                onValueChange={(value) => setSpeed(value[0])} // Live update for slider UI
-                onValueCommit={(value) => handleSpeedChangeCommit(value[0])} // Corrected: Use new handler name
+                onValueChange={(value) => setSpeed(value[0])}
+                onValueCommit={(value) => handleSpeedChangeCommit(value[0])}
                 className="mt-2"
               />
             </div>
@@ -581,8 +612,8 @@ export default function StepperCardDesign2({
                 min={100}
                 max={50000}
                 step={100}
-                onValueChange={(value) => setAcceleration(value[0])} // Live update for slider UI
-                onValueCommit={(value) => handleAccelChangeCommit(value[0])} // Corrected: Use new handler name
+                onValueChange={(value) => setAcceleration(value[0])}
+                onValueCommit={(value) => handleAccelChangeCommit(value[0])}
                 className="mt-2"
               />
             </div>

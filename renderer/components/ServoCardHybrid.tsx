@@ -542,25 +542,6 @@ export default function ServoCardHybrid({
                 </Button>
               </div>
             </div>
-
-            <div>
-              <div className="flex justify-between mb-1">
-                <Label htmlFor={`${id}-speed-slider`}>Movement Speed</Label>
-                <span className="text-sm font-medium">{speed}%</span>
-              </div>
-              <Slider
-                id={`${id}-speed-slider`}
-                value={[speed]}
-                min={1}
-                max={100}
-                step={1}
-                onValueChange={(value) => updateSpeed(value[0])}
-              />
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                <span>Slow</span>
-                <span>Fast</span>
-              </div>
-            </div>
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-3">
@@ -586,6 +567,25 @@ export default function ServoCardHybrid({
                   className="mt-1"
                   placeholder="Max"
                 />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between mb-1">
+                <Label htmlFor={`${id}-speed-slider`}>Movement Speed</Label>
+                <span className="text-sm font-medium">{speed}%</span>
+              </div>
+              <Slider
+                id={`${id}-speed-slider`}
+                value={[speed]}
+                min={1}
+                max={100}
+                step={1}
+                onValueChange={(value) => updateSpeed(value[0])}
+              />
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <span>Slow</span>
+                <span>Fast</span>
               </div>
             </div>
 

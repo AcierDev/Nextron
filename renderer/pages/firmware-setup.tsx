@@ -293,7 +293,7 @@ export default function FirmwareSetupPage() {
 
     try {
       // @ts-ignore - Global electron object
-      const result = await window.electron.flashFirmware(selectedPort);
+      await window.electron.flashFirmware(selectedPort);
       setStatus("success");
       setMessage("Firmware uploaded successfully! Starting IP detection...");
       setUploadStage("completed");
@@ -314,7 +314,7 @@ export default function FirmwareSetupPage() {
         setMessage("Error detecting IP address. Redirecting anyway...");
       }
 
-      router.push("/configurations");
+      router.push("/connection");
     } catch (error) {
       console.error("Firmware upload failed:", error);
 

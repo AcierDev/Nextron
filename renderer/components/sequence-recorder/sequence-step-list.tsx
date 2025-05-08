@@ -5,13 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -37,6 +30,7 @@ import {
   TimerIcon,
   ZapIcon,
   Settings2,
+  ChevronRight,
 } from "lucide-react";
 
 interface SequenceStepListProps {
@@ -140,7 +134,20 @@ export function SequenceStepList({
     setDialogStepData((prev) => ({
       ...prev,
       [field]: value,
-      ...(field === "deviceId" && { action: "" }),
+      ...(field === "deviceId" && {
+        action: "",
+        value: "",
+        speed: "",
+        acceleration: "",
+      }),
+      ...(field === "stepType" && {
+        action: "",
+        value: "",
+        speed: "",
+        acceleration: "",
+        deviceId: "",
+      }),
+      ...(field === "action" && { value: "", speed: "", acceleration: "" }),
     }));
   };
 
@@ -156,29 +163,55 @@ export function SequenceStepList({
         return;
       }
 
+      let parsedValue: number | boolean | string = 0;
+      const valueString = String(dialogStepData.value);
+      if (dialogStepData.action === "setValue") {
+        parsedValue = parseInt(valueString) === 1 ? 1 : 0;
+      } else {
+        parsedValue = parseFloat(valueString);
+        if (isNaN(parsedValue)) {
+          console.error("Invalid numeric value for action.");
+          return;
+        }
+      }
+
       const actionStepPayload: Omit<ActionStep, "id" | "type"> = {
         deviceId: dialogStepData.deviceId,
         deviceComponentGroup: device.componentGroup as keyof HardwareConfig,
         action: dialogStepData.action,
-        value: parseFloat(String(dialogStepData.value)) || 0,
-        ...(dialogStepData.speed && {
-          speed: parseFloat(String(dialogStepData.speed)),
-        }),
-        ...(dialogStepData.acceleration && {
-          acceleration: parseFloat(String(dialogStepData.acceleration)),
-        }),
+        value: parsedValue,
+        ...(dialogStepData.speed &&
+          !isNaN(parseFloat(String(dialogStepData.speed))) && {
+            speed: parseFloat(String(dialogStepData.speed)),
+          }),
+        ...(dialogStepData.acceleration &&
+          !isNaN(parseFloat(String(dialogStepData.acceleration))) && {
+            acceleration: parseFloat(String(dialogStepData.acceleration)),
+          }),
       };
+
       if (dialogStepData.editingStepId) {
-        updateStepInStore(dialogStepData.editingStepId, actionStepPayload);
+        updateStepInStore(dialogStepData.editingStepId, {
+          type: "action",
+          ...actionStepPayload,
+        });
       } else {
         addStepToStore(actionStepPayload);
       }
     } else {
+      const durationValue = Number(dialogStepData.duration);
+      if (isNaN(durationValue) || durationValue <= 0) {
+        console.error("Invalid duration for delay step.");
+        return;
+      }
       const delayStepPayload: Omit<DelayStep, "id" | "type"> = {
-        duration: Number(dialogStepData.duration) || 0,
+        duration: durationValue,
       };
       if (dialogStepData.editingStepId) {
-        updateStepInStore(dialogStepData.editingStepId, delayStepPayload);
+        updateStepInStore(dialogStepData.editingStepId, {
+          type: "delay",
+          ...delayStepPayload,
+        });
       } else {
         addStepToStore(delayStepPayload);
       }
@@ -278,149 +311,273 @@ export function SequenceStepList({
       )}
 
       <Dialog open={isStepDialogOpen} onOpenChange={setIsStepDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-xl md:max-w-2xl bg-card/80 dark:bg-card/80 backdrop-blur-md border rounded-xl shadow-lg">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="text-foreground">
               {dialogStepData.editingStepId ? "Edit Step" : "Add New Step"}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-muted-foreground">
               {dialogStepData.editingStepId
                 ? "Modify the details of this step."
                 : "Choose a device action or a delay to add to your sequence."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="stepType">Step Type</Label>
-              <Select
-                value={dialogStepData.stepType}
-                onValueChange={(value: "action" | "delay") =>
-                  handleDialogInputChange("stepType", value)
-                }
-                disabled={!!dialogStepData.editingStepId}
-              >
-                <SelectTrigger id="stepType">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="action">Device Action</SelectItem>
-                  <SelectItem value="delay">Delay / Wait</SelectItem>
-                </SelectContent>
-              </Select>
+          <div className="space-y-6 py-4">
+            <div>
+              <Label className="mb-3 block font-medium text-muted-foreground">
+                1. Choose Step Type
+              </Label>
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  variant={
+                    dialogStepData.stepType === "action"
+                      ? "secondary"
+                      : "outline"
+                  }
+                  onClick={() => handleDialogInputChange("stepType", "action")}
+                  disabled={!!dialogStepData.editingStepId}
+                  className="justify-center items-center p-4 h-auto rounded-md"
+                >
+                  <ZapIcon className="mr-3 h-5 w-5" />
+                  <div className="text-center">
+                    <p className="font-semibold">Device Action</p>
+                    <p className="text-xs text-muted-foreground">
+                      Control a motor, pin, etc.
+                    </p>
+                  </div>
+                </Button>
+                <Button
+                  variant={
+                    dialogStepData.stepType === "delay"
+                      ? "secondary"
+                      : "outline"
+                  }
+                  onClick={() => handleDialogInputChange("stepType", "delay")}
+                  disabled={!!dialogStepData.editingStepId}
+                  className="justify-center items-center p-4 h-auto rounded-md"
+                >
+                  <TimerIcon className="mr-3 h-5 w-5" />
+                  <div className="text-center">
+                    <p className="font-semibold">Delay</p>
+                    <p className="text-xs text-muted-foreground">
+                      Wait for a duration
+                    </p>
+                  </div>
+                </Button>
+              </div>
             </div>
 
             {dialogStepData.stepType === "action" && (
-              <>
-                <div className="grid gap-2">
-                  <Label htmlFor="deviceId">Device</Label>
-                  <Select
-                    value={dialogStepData.deviceId}
-                    onValueChange={(value) =>
-                      handleDialogInputChange("deviceId", value)
-                    }
-                  >
-                    <SelectTrigger id="deviceId">
-                      <SelectValue placeholder="Select device" />
-                    </SelectTrigger>
-                    <SelectContent>
+              <div className="space-y-4 border-t border-border pt-4 mt-4">
+                <div>
+                  <Label className="mb-3 block font-medium text-muted-foreground">
+                    2. Choose Device
+                  </Label>
+                  {devices.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      (No devices found in configuration)
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                       {devices.map((device) => (
-                        <SelectItem key={device.id} value={device.id}>
-                          {device.name} ({device.originalType})
-                        </SelectItem>
+                        <Button
+                          key={device.id}
+                          variant={
+                            dialogStepData.deviceId === device.id
+                              ? "secondary"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            handleDialogInputChange("deviceId", device.id)
+                          }
+                          className="text-xs justify-center h-auto p-2 rounded-md"
+                        >
+                          {device.name} ({device.componentGroup})
+                        </Button>
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </div>
+                  )}
                 </div>
 
                 {dialogStepData.deviceId && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="action">Action</Label>
-                    <Select
-                      value={dialogStepData.action}
-                      onValueChange={(value) =>
-                        handleDialogInputChange("action", value)
-                      }
-                    >
-                      <SelectTrigger id="action">
-                        <SelectValue placeholder="Select action" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {getAvailableActions(dialogStepData.deviceId).map(
-                          (act) => (
-                            <SelectItem key={act.value} value={act.value}>
-                              {act.label}
-                            </SelectItem>
-                          )
-                        )}
-                      </SelectContent>
-                    </Select>
+                  <div className="mt-4">
+                    <Label className="mb-3 block font-medium text-muted-foreground">
+                      3. Choose Action
+                    </Label>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {getAvailableActions(dialogStepData.deviceId).map(
+                        (act) => (
+                          <Button
+                            key={act.value}
+                            variant={
+                              dialogStepData.action === act.value
+                                ? "secondary"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              handleDialogInputChange("action", act.value)
+                            }
+                            className="text-xs justify-center h-auto p-2 rounded-md"
+                          >
+                            {act.label}
+                          </Button>
+                        )
+                      )}
+                    </div>
                   </div>
                 )}
-                <div className="grid gap-2">
-                  <Label htmlFor="value">Value</Label>
-                  <Input
-                    id="value"
-                    value={dialogStepData.value}
-                    onChange={(e) =>
-                      handleDialogInputChange("value", e.target.value)
-                    }
-                    placeholder="e.g., 90, 1000, true"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="grid gap-2">
-                    <Label htmlFor="speed">Speed (optional)</Label>
-                    <Input
-                      id="speed"
-                      type="number"
-                      value={dialogStepData.speed}
-                      onChange={(e) =>
-                        handleDialogInputChange("speed", e.target.value)
-                      }
-                      placeholder="e.g., 500"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="acceleration">
-                      Acceleration (optional)
+
+                {dialogStepData.action && (
+                  <div className="space-y-4 border-t border-border pt-4 mt-6">
+                    <Label className="block font-medium text-muted-foreground">
+                      4. Configure Action Parameters
                     </Label>
-                    <Input
-                      id="acceleration"
-                      type="number"
-                      value={dialogStepData.acceleration}
-                      onChange={(e) =>
-                        handleDialogInputChange("acceleration", e.target.value)
-                      }
-                      placeholder="e.g., 200"
-                    />
+                    <div className="grid gap-2">
+                      <Label htmlFor="value" className="text-muted-foreground">
+                        {dialogStepData.action === "setSpeed"
+                          ? "Target Speed"
+                          : dialogStepData.action === "setAcceleration"
+                          ? "Target Acceleration"
+                          : dialogStepData.action === "setAngle"
+                          ? "Target Angle"
+                          : dialogStepData.action === "moveTo"
+                          ? "Target Position"
+                          : dialogStepData.action === "setValue"
+                          ? "Value (0 or 1)"
+                          : "Value"}
+                      </Label>
+                      <Input
+                        id="value"
+                        type={
+                          dialogStepData.action === "setValue" ? "text" : "text"
+                        }
+                        inputMode={
+                          dialogStepData.action === "setValue"
+                            ? "numeric"
+                            : "decimal"
+                        }
+                        min={
+                          dialogStepData.action === "setValue" ? 0 : undefined
+                        }
+                        max={
+                          dialogStepData.action === "setValue" ? 1 : undefined
+                        }
+                        value={dialogStepData.value}
+                        onChange={(e) =>
+                          handleDialogInputChange("value", e.target.value)
+                        }
+                        placeholder={
+                          dialogStepData.action === "setSpeed"
+                            ? "steps/sec"
+                            : dialogStepData.action === "setAcceleration"
+                            ? "steps/sec²"
+                            : dialogStepData.action === "setAngle"
+                            ? "degrees"
+                            : dialogStepData.action === "moveTo"
+                            ? "steps"
+                            : dialogStepData.action === "setValue"
+                            ? "0 or 1"
+                            : "Enter value"
+                        }
+                        className="bg-muted/50 border-input text-foreground rounded-lg placeholder:text-muted-foreground focus-visible:ring-ring"
+                      />
+                    </div>
+
+                    {(dialogStepData.action === "moveTo" ||
+                      dialogStepData.action === "setAngle") && (
+                      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border mt-3">
+                        <div className="grid gap-2">
+                          <Label
+                            htmlFor="speed"
+                            className="text-muted-foreground"
+                          >
+                            Override Speed (Optional)
+                          </Label>
+                          <Input
+                            id="speed"
+                            type="text"
+                            inputMode="decimal"
+                            value={dialogStepData.speed}
+                            onChange={(e) =>
+                              handleDialogInputChange("speed", e.target.value)
+                            }
+                            placeholder="e.g., 500 steps/sec"
+                            className="bg-muted/50 border-input text-foreground rounded-lg placeholder:text-muted-foreground focus-visible:ring-ring"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label
+                            htmlFor="acceleration"
+                            className="text-muted-foreground"
+                          >
+                            Override Accel (Optional)
+                          </Label>
+                          <Input
+                            id="acceleration"
+                            type="text"
+                            inputMode="decimal"
+                            value={dialogStepData.acceleration}
+                            onChange={(e) =>
+                              handleDialogInputChange(
+                                "acceleration",
+                                e.target.value
+                              )
+                            }
+                            placeholder="e.g., 200 steps/sec²"
+                            className="bg-muted/50 border-input text-foreground rounded-lg placeholder:text-muted-foreground focus-visible:ring-ring"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </>
+                )}
+              </div>
             )}
 
             {dialogStepData.stepType === "delay" && (
-              <div className="grid gap-2">
-                <Label htmlFor="duration">Duration (ms)</Label>
+              <div className="grid gap-2 border-t border-border pt-4 mt-4">
+                <Label className="mb-3 block font-medium text-muted-foreground">
+                  2. Configure Delay
+                </Label>
+                <Label htmlFor="duration" className="text-muted-foreground">
+                  Duration (ms)
+                </Label>
                 <Input
                   id="duration"
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  min="1"
                   value={dialogStepData.duration}
                   onChange={(e) =>
-                    handleDialogInputChange("duration", Number(e.target.value))
+                    handleDialogInputChange(
+                      "duration",
+                      Math.max(
+                        1,
+                        Number(e.target.value) ||
+                          Number(dialogStepData.duration) ||
+                          1
+                      )
+                    )
                   }
+                  className="bg-muted/50 border-input text-foreground rounded-lg placeholder:text-muted-foreground focus-visible:ring-ring"
                 />
               </div>
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <DialogClose asChild>
-              <Button type="button" variant="outline">
+              <Button type="button" variant="outline" className="rounded-lg">
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="button" onClick={handleSaveStepDialog}>
+            <Button
+              type="button"
+              onClick={handleSaveStepDialog}
+              variant="default"
+              className="rounded-lg"
+            >
               Save Step
             </Button>
           </DialogFooter>
