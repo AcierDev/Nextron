@@ -1,0 +1,7 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+- All numeric fields should be text input fields so they can be cleared out in order to type in
+- Enter should always be used as a hotkey to continue

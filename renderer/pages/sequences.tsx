@@ -1,9 +1,18 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Head from "next/head";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   ArrowLeft,
   Plus,
@@ -35,8 +44,38 @@ export default function SequencesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
-  // Load sequences for this configuration from MongoDB
-  useEffect(() => {
+  const [isNameDialogVisible, setIsNameDialogVisible] = useState(false);
+  const [newSequenceName, setNewSequenceName] = useState("");
+
+  const handleCreateNewSequence = () => {
+    if (!newSequenceName.trim()) {
+      toast({
+        title: "Name Required",
+        description: "Please enter a name for the sequence.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!configId) {
+      toast({
+        title: "Error",
+        description: "Configuration ID is missing. Cannot create sequence.",
+        variant: "destructive",
+      });
+      console.error("Cannot create sequence, configId is missing.");
+      return;
+    }
+    router.push(
+      `/sequences?config=${configId}&id=new-sequence&name=${encodeURIComponent(
+        newSequenceName.trim()
+      )}`
+    );
+    setIsNameDialogVisible(false);
+    setNewSequenceName(""); // Reset for next time
+  };
+
+  // Memoize loadSequences
+  const loadSequences = useCallback(async () => {
     if (!configId) {
       toast({
         title: "Configuration ID missing",
@@ -46,34 +85,56 @@ export default function SequencesPage() {
       router.push("/configurations");
       return;
     }
+    console.log("Loading sequences for config:", configId);
+    try {
+      setIsLoading(true);
+      const configData = await window.ipc.invoke("get-config-by-id", configId);
 
-    async function loadSequences() {
-      try {
-        setIsLoading(true);
-        const configData = await window.ipc.invoke(
-          "get-config-by-id",
-          configId
-        );
-
-        if (!configData) {
-          throw new Error("Configuration not found");
-        }
-
+      if (!configData) {
+        // If configData is null (e.g. new config not yet saved with sequences array)
+        // or if it genuinely doesn't exist, treat as empty sequences.
+        setSequences([]);
+        // Optionally, you could throw an error here if a configId was provided but no config was found
+        // throw new Error("Configuration not found");
+      } else {
         setSequences(configData.sequences || []);
-      } catch (error) {
-        console.error("Failed to load sequences:", error);
-        toast({
-          title: "Error loading sequences",
-          description: error.message || "An unknown error occurred",
-          variant: "destructive",
-        });
-      } finally {
-        setIsLoading(false);
       }
+    } catch (error: any) {
+      console.error("Failed to load sequences:", error);
+      toast({
+        title: "Error loading sequences",
+        description: error.message || "An unknown error occurred",
+        variant: "destructive",
+      });
+      setSequences([]); // Set to empty on error to avoid render issues
+    } finally {
+      setIsLoading(false);
     }
-
-    loadSequences();
   }, [configId, router, toast]);
+
+  // Load sequences initially or when configId changes, or when returning to list view
+  useEffect(() => {
+    if (configId && !sequenceId) {
+      // Only load if on list view (no sequenceId)
+      loadSequences();
+    } else if (!configId && !sequenceId) {
+      // If no configId and on list view, means we probably should go to /configurations
+      // This case should ideally be handled by the redirect in loadSequences if configId is missing
+      // but as a fallback:
+      toast({
+        title: "Configuration ID missing",
+        description: "Please select a configuration first.",
+        variant: "destructive",
+      });
+      router.push("/configurations");
+    } else if (sequenceId) {
+      // If there is a sequenceId, we are in editor mode, don't load all sequences.
+      // The editor will use its own store (useSequenceStore) to load the specific sequence.
+      // We might want to set sequences to empty or handle loading indicator differently.
+      setIsLoading(false); // Not loading the list in this view
+      setSequences([]); // Clear sequences list when in editor view
+    }
+  }, [configId, sequenceId, loadSequences, router, toast]);
 
   // Check if any sequence is currently running
   useEffect(() => {
@@ -189,9 +250,10 @@ export default function SequencesPage() {
           </div>
 
           <Button
-            onClick={() =>
-              router.push(`/sequences?config=${configId}&id=new-sequence`)
-            }
+            onClick={() => {
+              setNewSequenceName(""); // Reset name input
+              setIsNameDialogVisible(true);
+            }}
             className="flex items-center gap-2 bg-blue-600/90 hover:bg-blue-700 text-white"
           >
             <Plus className="h-4 w-4" />
@@ -319,6 +381,45 @@ export default function SequencesPage() {
           </div>
         )}
       </div>
+
+      {/* Dialog for New Sequence Name */}
+      <Dialog open={isNameDialogVisible} onOpenChange={setIsNameDialogVisible}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Name Your New Sequence</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="sequence-name" className="mb-2 block">
+              Sequence Name
+            </Label>
+            <Input
+              id="sequence-name"
+              value={newSequenceName}
+              onChange={(e) => setNewSequenceName(e.target.value)}
+              placeholder="E.g., Startup Routine"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newSequenceName.trim()) {
+                  handleCreateNewSequence();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsNameDialogVisible(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateNewSequence}
+              disabled={!newSequenceName.trim()}
+            >
+              Create & Edit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1277,7 +1277,7 @@ export default function Dashboard() {
               variant="secondary"
               size="sm"
               onClick={() => router.push("/connection")}
-              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:hover:bg-white"
+              className="ml-2 bg-white/90 hover:bg-white dark:bg-white/90 dark:hover:bg-white dark:text-black"
             >
               Connect to Board
             </Button>

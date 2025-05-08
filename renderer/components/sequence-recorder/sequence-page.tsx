@@ -59,6 +59,7 @@ export default function SequencePage() {
   const searchParams = useSearchParams();
   const initialSequenceId = searchParams.get("id");
   const configId = searchParams.get("config");
+  const initialNameFromUrl = searchParams.get("name");
   const { toast } = useToast();
 
   const {
@@ -85,7 +86,10 @@ export default function SequencePage() {
     if (configId) {
       loadConfigAndInitializeSequence(
         configId,
-        initialSequenceId !== "new-sequence" ? initialSequenceId : undefined
+        initialSequenceId !== "new-sequence"
+          ? initialSequenceId
+          : "new-sequence",
+        initialNameFromUrl || undefined
       );
     } else {
       toast({
@@ -101,6 +105,7 @@ export default function SequencePage() {
   }, [
     configId,
     initialSequenceId,
+    initialNameFromUrl,
     loadConfigAndInitializeSequence,
     resetStore,
     toast,
@@ -112,10 +117,13 @@ export default function SequencePage() {
       activeConfigId === configId &&
       initialSequenceId === "new-sequence" &&
       !currentSequence &&
-      !isLoading
+      !isLoading &&
+      !initialNameFromUrl
     ) {
       if (availableDevices.length > 0) {
-        createNewSequence("New Sequence", "Describe your sequence here");
+        console.log(
+          "Secondary useEffect: 'new-sequence' without initialName, store should have created one."
+        );
       }
     }
   }, [
@@ -124,8 +132,8 @@ export default function SequencePage() {
     initialSequenceId,
     currentSequence,
     isLoading,
-    createNewSequence,
     availableDevices,
+    initialNameFromUrl,
   ]);
 
   const sendMessage: SendMessage = (message) => {

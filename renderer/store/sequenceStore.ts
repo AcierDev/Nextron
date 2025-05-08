@@ -37,7 +37,8 @@ interface SequenceState {
 interface SequenceActions {
   loadConfigAndInitializeSequence: (
     configId: string,
-    sequenceId?: string
+    sequenceId?: string,
+    initialNameForNewSequence?: string
   ) => Promise<void>;
   createNewSequence: (name: string, description?: string) => void;
   updateSequenceDetails: (
@@ -82,85 +83,19 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
       });
     },
 
-    loadConfigAndInitializeSequence: async (configId, sequenceId) => {
+    loadConfigAndInitializeSequence: async (
+      configId,
+      sequenceId,
+      initialNameForNewSequence
+    ) => {
       set((state) => {
         state.isLoading = true;
         state.error = null;
         state.activeConfigId = configId;
-        // Reset previous sequence and devices if any
         state.currentSequence = null;
         state.availableDevices = [];
       });
       try {
-        // TODO: Replace with actual IPC call to fetch config
-        // const configData: FullConfigDataIPC = await window.electron.ipcRenderer.invoke('get-config-by-id', configId);
-        // console.log(`Simulating IPC call to get-config-by-id for ${configId}`);
-        // Mock config data for now, assuming it's fetched via IPC
-        // const mockConfigData: FullConfigDataIPC = {
-        //   _id: configId,
-        //   name: "Mock Config",
-        //   hardware: {
-        //     servos: [
-        //       {
-        //         id: "servo1",
-        //         name: "Gripper",
-        //         type: "Servo",
-        //         pins: [9],
-        //         minAngle: 0,
-        //         maxAngle: 180,
-        //       },
-        //     ],
-        //     steppers: [
-        //       {
-        //         id: "stepper1",
-        //         name: "X-Axis",
-        //         type: "Stepper",
-        //         pins: [2, 3],
-        //         maxSpeed: 1000,
-        //         acceleration: 500,
-        //       },
-        //     ],
-        //     pins: [
-        //       { id: "pin1", name: "LED", type: "Digital Output", pins: [13] },
-        //     ],
-        //     sensors: [],
-        //     relays: [],
-        //   },
-        //   sequences:
-        //     sequenceId === "seq1"
-        //       ? [
-        //           {
-        //             id: "seq1",
-        //             name: "Test Sequence 1",
-        //             description: "A test sequence for mock config",
-        //             steps: [
-        //               {
-        //                 type: "action",
-        //                 id: uuidv4(),
-        //                 deviceId: "servo1",
-        //                 deviceComponentGroup: "servos",
-        //                 action: "setAngle",
-        //                 value: 90,
-        //               },
-        //               { type: "delay", id: uuidv4(), duration: 1000 },
-        //               {
-        //                 type: "action",
-        //                 id: uuidv4(),
-        //                 deviceId: "stepper1",
-        //                 deviceComponentGroup: "steppers",
-        //                 action: "moveTo",
-        //                 value: 1000,
-        //               },
-        //             ],
-        //             createdAt: new Date().toISOString(),
-        //             updatedAt: new Date().toISOString(),
-        //           },
-        //         ]
-        //       : [],
-        //   createdAt: new Date().toISOString(),
-        //   updatedAt: new Date().toISOString(),
-        // };
-
         const fetchedConfigData: FullConfigDataIPC = await window.ipc.invoke(
           "get-config-by-id",
           configId
@@ -170,7 +105,6 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
           throw new Error("Configuration not found.");
         }
 
-        // Ensure sequences is an array, even if undefined in fetched data (though our type expects it)
         const configData = {
           ...fetchedConfigData,
           sequences: fetchedConfigData.sequences || [],
@@ -179,7 +113,11 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
         get()._setDevicesFromHardwareConfig(configData.hardware);
 
         let sequenceToLoad: Sequence | null = null;
-        if (sequenceId && configData.sequences) {
+        if (
+          sequenceId &&
+          sequenceId !== "new-sequence" &&
+          configData.sequences
+        ) {
           sequenceToLoad =
             configData.sequences.find((seq) => seq.id === sequenceId) || null;
         }
@@ -189,19 +127,16 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
             state.currentSequence = sequenceToLoad;
           });
         } else if (sequenceId) {
-          // If a sequenceId was provided but not found, it's an error or we could offer to create one
-          console.warn(
-            `Sequence with id ${sequenceId} not found in config ${configId}.`
+          // Covers "new-sequence" or a non-existent ID
+          const nameForNew = initialNameForNewSequence || "New Sequence";
+          console.log(
+            `No sequence found for ID '${sequenceId}', creating new one named: '${nameForNew}'`
           );
-          // For now, we'll just start fresh, but a real app might clear sequenceId or show an error
-          // Or, if 'new-sequence' is a convention, handle that explicitly to create a new one.
-          get().createNewSequence("New Sequence from ID"); // Auto-create if ID was given but not found
+          get().createNewSequence(nameForNew);
         } else {
-          // If no sequenceId, or if creating a new sequence explicitly
-          // get().createNewSequence("New Sequence"); // Don't create one by default, let user action do it
           set((state) => {
             state.currentSequence = null;
-          }); // Start with no sequence selected
+          });
         }
       } catch (err: any) {
         set((state) => {
@@ -238,6 +173,9 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
     },
 
     updateSequenceDetails: (details) => {
+      const sequenceExists = !!get().currentSequence;
+      const currentActiveConfigId = get().activeConfigId;
+
       set((state) => {
         if (state.currentSequence) {
           state.currentSequence = {
@@ -247,11 +185,22 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
           };
         }
       });
+
+      if (sequenceExists && currentActiveConfigId) {
+        get().saveSequenceToConfig();
+      } else {
+        console.warn(
+          "Sequence details updated in store, but not auto-saved (no current sequence or active config)."
+        );
+      }
     },
 
     addStep: (
       stepData: Omit<ActionStep, "id" | "type"> | Omit<DelayStep, "id" | "type">
     ) => {
+      const sequenceExists = !!get().currentSequence;
+      const currentActiveConfigId = get().activeConfigId;
+
       set((state) => {
         if (state.currentSequence) {
           const commonProps = { id: uuidv4() };
@@ -285,9 +234,20 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
           state.currentSequence.updatedAt = new Date().toISOString();
         }
       });
+
+      if (sequenceExists && currentActiveConfigId) {
+        get().saveSequenceToConfig();
+      } else {
+        console.warn(
+          "Step added in store, but not auto-saved (no current sequence or active config)."
+        );
+      }
     },
 
     updateStep: (stepId, updatedData) => {
+      const sequenceExists = !!get().currentSequence;
+      const currentActiveConfigId = get().activeConfigId;
+
       set((state) => {
         if (state.currentSequence) {
           const stepIndex = state.currentSequence.steps.findIndex(
@@ -303,9 +263,20 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
           }
         }
       });
+
+      if (sequenceExists && currentActiveConfigId) {
+        get().saveSequenceToConfig();
+      } else {
+        console.warn(
+          "Step updated in store, but not auto-saved (no current sequence or active config)."
+        );
+      }
     },
 
     deleteStep: (stepId) => {
+      const sequenceExists = !!get().currentSequence;
+      const currentActiveConfigId = get().activeConfigId;
+
       set((state) => {
         if (state.currentSequence) {
           state.currentSequence.steps = state.currentSequence.steps.filter(
@@ -314,15 +285,34 @@ export const useSequenceStore = create<SequenceState & SequenceActions>()(
           state.currentSequence.updatedAt = new Date().toISOString();
         }
       });
+
+      if (sequenceExists && currentActiveConfigId) {
+        get().saveSequenceToConfig();
+      } else {
+        console.warn(
+          "Step deleted in store, but not auto-saved (no current sequence or active config)."
+        );
+      }
     },
 
     reorderSteps: (steps) => {
+      const sequenceExists = !!get().currentSequence;
+      const currentActiveConfigId = get().activeConfigId;
+
       set((state) => {
         if (state.currentSequence) {
           state.currentSequence.steps = steps;
           state.currentSequence.updatedAt = new Date().toISOString();
         }
       });
+
+      if (sequenceExists && currentActiveConfigId) {
+        get().saveSequenceToConfig();
+      } else {
+        console.warn(
+          "Steps reordered in store, but not auto-saved (no current sequence or active config)."
+        );
+      }
     },
 
     saveSequenceToConfig: async () => {
