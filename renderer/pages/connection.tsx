@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { motion } from "framer-motion";
 
 // Define connection status type
@@ -252,8 +252,17 @@ export default function ConnectionPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="backdrop-blur-md bg-white/70 dark:bg-gray-800/50 rounded-xl border border-white/20 dark:border-gray-700/30 shadow-lg p-8 max-w-md w-full"
+        className="backdrop-blur-md bg-white/70 dark:bg-gray-800/50 rounded-xl border border-white/20 dark:border-gray-700/30 shadow-lg p-8 max-w-md w-full relative"
       >
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => router.push("/configurations")}
+          className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          aria-label="Close"
+        >
+          <X className="h-5 w-5" />
+        </Button>
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white text-center mb-2">
           Connect to Board
         </h1>

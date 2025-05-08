@@ -1,0 +1,67 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Microcontroller WebSocket Message Protocol
+
+## Protocol Overview
+
+The communication between the desktop application and the ESP32 microcontroller uses WebSockets with JSON messages. The protocol is defined in [message_handler.cpp](mdc:firmware/microcontroller/src/message_handler.cpp).
+
+## Message Structure
+
+All messages follow a standard format:
+
+```json
+{
+  "action": "actionName",
+  "componentGroup": "groupName",
+  "id": "componentId",
+  "config": { /* Component-specific configuration */ }
+}
+```
+
+- **action**: The operation to perform (configure, read, write, etc.)
+- **componentGroup**: The category of component (pins, servos, steppers, system)
+- **id**: Unique identifier for the specific component
+
+## Component Groups
+
+### 1. Pins
+Controls general-purpose IO pins with actions:
+- `configure`: Set up pin properties (mode, type, pull mode)
+- `readPin`: Read current pin value
+- `writePin`: Set pin output value
+
+### 2. Servos
+Controls servo motors with actions:
+- `configure`: Set up servo properties (min/max angles, pulse widths)
+- `moveServo`: Move servo to a target angle/position
+- `detachServo`: Disable servo output
+
+### 3. Steppers
+Controls stepper motors with actions:
+- `configure`: Set up stepper properties (pins, speed, acceleration)
+- `moveToPosition`: Move to an absolute position
+- `moveRelative`: Move a relative distance
+- `stop`: Stop current movement
+- `home`: Execute homing sequence
+
+### 4. System
+System-level operations:
+- `ping`: Check connectivity
+- `reset`: Restart the microcontroller
+
+## Response Format
+
+Responses follow a similar format:
+```json
+{
+  "status": "OK" | "ERROR",
+  "message": "Optional message",
+  "id": "componentId" 
+}
+```
+
+Error messages include a description of what went wrong.

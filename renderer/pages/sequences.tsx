@@ -1,41 +1,21 @@
 import React, { useState, useEffect } from "react";
 import Head from "next/head";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ArrowLeft, Plus, PlayCircle, Edit, Trash2 } from "lucide-react";
-
-// Types
-interface Sequence {
-  id: string;
-  name: string;
-  description: string;
-  stepsCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// Mock data for demo purposes
-const mockSequences: Sequence[] = [
-  {
-    id: "seq-1",
-    name: "Simple Movement Pattern",
-    description: "A basic sequence for testing motor movements",
-    stepsCount: 8,
-    createdAt: "2023-08-15T10:30:00Z",
-    updatedAt: "2023-08-16T14:45:00Z",
-  },
-  {
-    id: "seq-2",
-    name: "Calibration Routine",
-    description: "Sequence to calibrate all motors",
-    stepsCount: 12,
-    createdAt: "2023-09-01T08:20:00Z",
-    updatedAt: "2023-09-01T09:15:00Z",
-  },
-];
+import {
+  ArrowLeft,
+  Plus,
+  PlayCircle,
+  Edit,
+  Trash2,
+  Loader2,
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Sequence } from "../../common/types";
+import { useSequenceRunner } from "@/hooks/use-sequence-runner";
+import { SequenceRunnerStatus } from "@/components/sequence-runner/sequence-runner-status";
 
 // Dynamically import the SequencePage component to avoid SSR issues
 const SequencePage = dynamic(
@@ -48,16 +28,132 @@ export default function SequencesPage() {
   const searchParams = useSearchParams();
   const configId = searchParams.get("config");
   const sequenceId = searchParams.get("id");
+  const { toast } = useToast();
+  const sequenceRunner = useSequenceRunner();
 
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
-  // Load sequences (mock data for now)
+  // Load sequences for this configuration from MongoDB
   useEffect(() => {
-    // In a real app, this would fetch from an API or IPC
-    setSequences(mockSequences);
-    setIsLoading(false);
-  }, []);
+    if (!configId) {
+      toast({
+        title: "Configuration ID missing",
+        description: "Cannot load sequences without a configuration ID",
+        variant: "destructive",
+      });
+      router.push("/configurations");
+      return;
+    }
+
+    async function loadSequences() {
+      try {
+        setIsLoading(true);
+        const configData = await window.ipc.invoke(
+          "get-config-by-id",
+          configId
+        );
+
+        if (!configData) {
+          throw new Error("Configuration not found");
+        }
+
+        setSequences(configData.sequences || []);
+      } catch (error) {
+        console.error("Failed to load sequences:", error);
+        toast({
+          title: "Error loading sequences",
+          description: error.message || "An unknown error occurred",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadSequences();
+  }, [configId, router, toast]);
+
+  // Check if any sequence is currently running
+  useEffect(() => {
+    if (sequenceRunner.isRunning) {
+      // Refresh run state when returning to the page
+      sequenceRunner.refreshState();
+    }
+  }, [sequenceRunner]);
+
+  // Handle sequence deletion
+  const handleDeleteSequence = async (sequenceId: string) => {
+    if (!configId) return;
+
+    try {
+      setIsDeleting(sequenceId);
+
+      // Get the current config data with sequences
+      const configData = await window.ipc.invoke("get-config-by-id", configId);
+
+      if (!configData || !configData.sequences) {
+        throw new Error("Configuration or sequences not found");
+      }
+
+      // Filter out the sequence to delete
+      const updatedSequences = configData.sequences.filter(
+        (seq) => seq.id !== sequenceId
+      );
+
+      // Update the configuration with the new sequences array
+      await window.ipc.invoke("update-config", configId, {
+        sequences: updatedSequences,
+      });
+
+      // Update the UI
+      setSequences(updatedSequences);
+
+      toast({
+        title: "Sequence deleted",
+        description: "The sequence has been removed successfully",
+      });
+    } catch (error) {
+      console.error("Failed to delete sequence:", error);
+      toast({
+        title: "Error deleting sequence",
+        description: error.message || "An unknown error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
+  // Run a sequence
+  const handleRunSequence = async (sequence: Sequence) => {
+    // Check if we have a connection before running
+    try {
+      const connectionStatus = await window.ipc.invoke("get-connection-status");
+
+      if (!connectionStatus.connected) {
+        toast({
+          title: "Connection Required",
+          description:
+            "Please connect to the CNC device before running a sequence.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Start the sequence
+      await sequenceRunner.runSequence(sequence);
+    } catch (error) {
+      console.error("Failed to check connection status:", error);
+      toast({
+        title: "Connection Error",
+        description:
+          error.message || "An error occurred checking the connection status.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // If sequence ID is provided, show the sequence editor
   if (sequenceId) {
@@ -103,8 +199,16 @@ export default function SequencesPage() {
           </Button>
         </header>
 
+        {/* Add sequence runner status component */}
+        {sequenceRunner.isRunning && (
+          <div className="mb-6">
+            <SequenceRunnerStatus />
+          </div>
+        )}
+
         {isLoading ? (
           <div className="text-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-primary" />
             <p className="text-gray-500 dark:text-gray-400">
               Loading sequences...
             </p>
@@ -143,7 +247,7 @@ export default function SequencesPage() {
                       {sequence.description}
                     </p>
                     <div className="flex items-center text-xs text-gray-500 dark:text-gray-400">
-                      <span>{sequence.stepsCount} steps</span>
+                      <span>{sequence.steps.length} steps</span>
                       <span className="mx-2">•</span>
                       <span>
                         Updated{" "}
@@ -171,23 +275,41 @@ export default function SequencesPage() {
                         variant="outline"
                         size="sm"
                         className="text-red-500 border-red-200 hover:border-red-300 hover:text-red-600"
-                        onClick={() => {
-                          // In a real app, this would confirm and delete
-                          alert("Sequence deletion would happen here");
-                        }}
+                        onClick={() => handleDeleteSequence(sequence.id)}
+                        disabled={isDeleting === sequence.id}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        {isDeleting === sequence.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
                       </Button>
                       <Button
                         size="sm"
-                        className="bg-green-600 hover:bg-green-700 text-white"
-                        onClick={() => {
-                          // In a real app, this would start sequence playback
-                          alert("Sequence playback would start here");
-                        }}
+                        className={`${
+                          sequenceRunner.isRunning &&
+                          sequenceRunner.sequenceId === sequence.id
+                            ? "bg-yellow-600 hover:bg-yellow-700"
+                            : "bg-green-600 hover:bg-green-700"
+                        } text-white`}
+                        onClick={() => handleRunSequence(sequence)}
+                        disabled={
+                          sequenceRunner.isRunning &&
+                          sequenceRunner.sequenceId !== sequence.id
+                        }
                       >
-                        <PlayCircle className="h-3.5 w-3.5 mr-1" />
-                        Run
+                        {sequenceRunner.isRunning &&
+                        sequenceRunner.sequenceId === sequence.id ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                            Running...
+                          </>
+                        ) : (
+                          <>
+                            <PlayCircle className="h-3.5 w-3.5 mr-1" />
+                            Run
+                          </>
+                        )}
                       </Button>
                     </div>
                   </div>

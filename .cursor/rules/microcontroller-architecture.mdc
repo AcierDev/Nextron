@@ -1,0 +1,50 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Microcontroller Architecture
+
+## Core Architecture
+
+The ESP32 firmware follows a modular architecture:
+
+1. **Main Loop Architecture**
+   - [main.cpp](mdc:firmware/microcontroller/src/main.cpp): Contains the Arduino `setup()` and `loop()` functions
+   - The loop handles regular updates for WiFi, pin states, servos, and steppers
+   - Non-blocking design using periodic time-based updates
+
+2. **WebSocket Communication**
+   - [message_handler.cpp](mdc:firmware/microcontroller/src/message_handler.cpp): Processes WebSocket messages
+   - Handles JSON messages between the Electron app and the ESP32
+   - Messages follow a standard format with "action" and "componentGroup" fields
+
+3. **Configuration System**
+   - [config.h](mdc:firmware/microcontroller/src/config.h): Defines configuration structures
+   - Stores settings for pins, servos, and steppers in memory
+   - Components are identified by unique string IDs
+
+## Hardware Control
+
+The firmware provides control interfaces for:
+
+1. **Stepper Motors**
+   - Uses FastAccelStepper library
+   - Position control with acceleration profiles
+   - Position limits and homing functionality
+
+2. **Servo Motors**
+   - PWM control via ESP32's LEDC peripheral
+   - Smooth motion with speed control
+   - Configurable angle ranges and pulse widths
+
+3. **IO Pins**
+   - Digital and analog I/O management
+   - Input pins with optional debouncing (using Bounce2 library)
+   - PWM output support
+
+## Network Connectivity
+
+- [wifi_manager.cpp](mdc:firmware/microcontroller/src/network/wifi_manager.cpp): Handles WiFi connection
+- Auto-reconnect capability
+- IP address management and reporting

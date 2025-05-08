@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Clock, Settings } from "lucide-react";
+import { Plus, Clock } from "lucide-react";
 import { SequenceTimeline } from "@/components/sequence-recorder/sequence-timeline";
 import { SequenceControls } from "@/components/sequence-recorder/sequence-controls";
 import { SequenceStepList } from "@/components/sequence-recorder/sequence-step-list";
@@ -11,26 +11,31 @@ import { SequenceDevicePanel } from "@/components/sequence-recorder/sequence-dev
 import { SequenceHeader } from "@/components/sequence-recorder/sequence-header";
 import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
+import { useSequenceStore } from "@/store/sequenceStore";
+import { useSequenceRunner } from "@/hooks/use-sequence-runner";
 
 // Types
+/*
 export type DeviceType = "stepper" | "servo" | "io";
 
 export interface Device {
   id: string;
   name: string;
   type: DeviceType;
-  [key: string]: any;
+  [key: string]: any; // Keep for flexibility from dashboard/device panel
 }
 
 export interface SequenceStep {
   id: string;
+  timestamp: number; // Milliseconds from sequence start when this step begins
   deviceId: string;
+  deviceName: string; // Keep for display
   deviceType: DeviceType;
-  deviceName: string;
-  action: string;
-  value: number;
-  duration: number;
-  timestamp: number;
+  action: string; // The command sent to the device (e.g., "setAngle", "moveTo")
+  value: any; // The value for the command (number, boolean, object, etc.)
+  // Optional fields
+  speed?: number;
+  acceleration?: number;
 }
 
 export interface Sequence {
@@ -41,192 +46,100 @@ export interface Sequence {
   createdAt: string;
   updatedAt: string;
 }
+*/
+
+// Define SendMessage type if not already globally available
+type SendMessage = (message: object) => void;
+
+// Update props for SequencePage if needed, or get sendMessage from context/hook
+// interface SequencePageProps { sendMessage: SendMessage; }
 
 export default function SequencePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const sequenceId = searchParams.get("id");
+  const initialSequenceId = searchParams.get("id");
   const configId = searchParams.get("config");
   const { toast } = useToast();
 
-  // States
-  const [sequence, setSequence] = useState<Sequence>({
-    id: sequenceId || "new-sequence",
-    name: "New Sequence",
-    description: "Describe your sequence here",
-    steps: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
-  const [devices, setDevices] = useState<Device[]>([]);
+  const {
+    currentSequence,
+    availableDevices,
+    isLoading,
+    error,
+    activeConfigId,
+    loadConfigAndInitializeSequence,
+    resetStore,
+    createNewSequence,
+  } = useSequenceStore();
+
+  // States for UI interactions not directly in sequence data (recording, playback)
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [currentStepIndex, setCurrentStepIndex] = useState(-1);
-  const [recordStartTime, setRecordStartTime] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState("timeline");
 
-  // Mock devices for demonstration
-  useEffect(() => {
-    // In a real app, this would fetch devices from the API
-    setDevices([
-      {
-        id: "stepper-1",
-        name: "X-Axis Stepper",
-        type: "stepper",
-        position: 0,
-        speed: 1000,
-        acceleration: 500,
-        stepsPerInch: 200,
-        minPosition: -50000,
-        maxPosition: 50000,
-        pins: { step: 2, direction: 3, enable: 4 },
-      },
-      {
-        id: "stepper-2",
-        name: "Y-Axis Stepper",
-        type: "stepper",
-        position: 0,
-        speed: 1000,
-        acceleration: 500,
-        stepsPerInch: 200,
-        minPosition: -50000,
-        maxPosition: 50000,
-        pins: { step: 5, direction: 6, enable: 7 },
-      },
-      {
-        id: "servo-1",
-        name: "Gripper Servo",
-        type: "servo",
-        angle: 90,
-        minAngle: 0,
-        maxAngle: 180,
-        pins: { control: 9 },
-      },
-      {
-        id: "io-1",
-        name: "Pump Control",
-        type: "io",
-        pinNumber: 12,
-        mode: "output",
-        pinType: "digital",
-        value: 0,
-      },
-    ]);
-  }, []);
+  // Use the sequence runner
+  const sequenceRunner = useSequenceRunner();
 
-  // Load sequence if editing an existing one
   useEffect(() => {
-    if (sequenceId && sequenceId !== "new-sequence") {
-      // In a real app, this would fetch the sequence from the API
-      // For now, we'll use mock data
-      const mockSequence: Sequence = {
-        id: sequenceId,
-        name: "Sample Movement Sequence",
-        description: "A demonstration sequence that moves motors in a pattern",
-        steps: [
-          {
-            id: "step-1",
-            deviceId: "stepper-1",
-            deviceType: "stepper",
-            deviceName: "X-Axis Stepper",
-            action: "moveTo",
-            value: 10000,
-            duration: 2000,
-            timestamp: 0,
-          },
-          {
-            id: "step-2",
-            deviceId: "stepper-2",
-            deviceType: "stepper",
-            deviceName: "Y-Axis Stepper",
-            action: "moveTo",
-            value: 5000,
-            duration: 1500,
-            timestamp: 2000,
-          },
-          {
-            id: "step-3",
-            deviceId: "servo-1",
-            deviceType: "servo",
-            deviceName: "Gripper Servo",
-            action: "setAngle",
-            value: 45,
-            duration: 1000,
-            timestamp: 3500,
-          },
-          {
-            id: "step-4",
-            deviceId: "io-1",
-            deviceType: "io",
-            deviceName: "Pump Control",
-            action: "setValue",
-            value: 1,
-            duration: 0,
-            timestamp: 4500,
-          },
-          {
-            id: "step-5",
-            deviceId: "stepper-1",
-            deviceType: "stepper",
-            deviceName: "X-Axis Stepper",
-            action: "moveTo",
-            value: 0,
-            duration: 2000,
-            timestamp: 6000,
-          },
-          {
-            id: "step-6",
-            deviceId: "stepper-2",
-            deviceType: "stepper",
-            deviceName: "Y-Axis Stepper",
-            action: "moveTo",
-            value: 0,
-            duration: 1500,
-            timestamp: 8000,
-          },
-          {
-            id: "step-7",
-            deviceId: "servo-1",
-            deviceType: "servo",
-            deviceName: "Gripper Servo",
-            action: "setAngle",
-            value: 90,
-            duration: 1000,
-            timestamp: 9500,
-          },
-          {
-            id: "step-8",
-            deviceId: "io-1",
-            deviceType: "io",
-            deviceName: "Pump Control",
-            action: "setValue",
-            value: 0,
-            duration: 0,
-            timestamp: 10500,
-          },
-        ],
-        createdAt: "2023-08-15T10:30:00Z",
-        updatedAt: "2023-08-16T14:45:00Z",
-      };
-      setSequence(mockSequence);
+    if (configId) {
+      loadConfigAndInitializeSequence(
+        configId,
+        initialSequenceId !== "new-sequence" ? initialSequenceId : undefined
+      );
+    } else {
+      toast({
+        title: "Error: Configuration ID Missing",
+        description: "Cannot load sequence page without a configuration ID.",
+        variant: "destructive",
+      });
     }
-  }, [sequenceId]);
 
-  // Handle recording state
+    return () => {
+      resetStore();
+    };
+  }, [
+    configId,
+    initialSequenceId,
+    loadConfigAndInitializeSequence,
+    resetStore,
+    toast,
+  ]);
+
+  useEffect(() => {
+    if (
+      configId &&
+      activeConfigId === configId &&
+      initialSequenceId === "new-sequence" &&
+      !currentSequence &&
+      !isLoading
+    ) {
+      if (availableDevices.length > 0) {
+        createNewSequence("New Sequence", "Describe your sequence here");
+      }
+    }
+  }, [
+    configId,
+    activeConfigId,
+    initialSequenceId,
+    currentSequence,
+    isLoading,
+    createNewSequence,
+    availableDevices,
+  ]);
+
+  const sendMessage: SendMessage = (message) => {
+    console.log("SIMULATED SEND MESSAGE:", JSON.stringify(message));
+  };
+
   const toggleRecording = () => {
     if (isRecording) {
-      // Stop recording
       setIsRecording(false);
-      setRecordStartTime(null);
       toast({
         title: "Recording stopped",
-        description: `Recorded ${sequence.steps.length} steps`,
       });
     } else {
-      // Start recording
       setIsRecording(true);
-      setRecordStartTime(Date.now());
       toast({
         title: "Recording started",
         description: "Perform actions on devices to record them",
@@ -234,234 +147,269 @@ export default function SequencePage() {
     }
   };
 
-  // Handle playback
   const togglePlayback = () => {
     if (isPlaying) {
-      // Pause playback
       setIsPlaying(false);
     } else {
-      // Start playback
-      if (sequence.steps.length === 0) {
+      if (currentSequence && currentSequence.steps.length > 0) {
+        setIsPlaying(true);
+      } else {
         toast({
-          title: "No steps to play",
-          description: "Record some steps first",
+          title: "Cannot Play",
+          description: "Sequence has no steps to play.",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
+  const handleGoBack = () => {
+    if (configId) {
+      router.push(`/sequences?config=${configId}`); // Navigate back to sequences list instead of dashboard
+    } else {
+      router.push("/configurations"); // Fallback if no configId
+    }
+  };
+
+  // Function to run the current sequence
+  const runCurrentSequence = async () => {
+    if (!currentSequence) {
+      toast({
+        title: "No Sequence",
+        description: "There is no sequence to run.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (currentSequence.steps.length === 0) {
+      toast({
+        title: "Empty Sequence",
+        description: "This sequence has no steps to run.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      // Check connection status first
+      const connectionStatus = await window.ipc.invoke("get-connection-status");
+
+      if (!connectionStatus.connected) {
+        toast({
+          title: "Not Connected",
+          description: "Please connect to a device before running sequences.",
           variant: "destructive",
         });
         return;
       }
-      setIsPlaying(true);
-      setCurrentStepIndex(0);
+
+      // Run the sequence
+      await sequenceRunner.runSequence(currentSequence, 0, playbackSpeed);
+    } catch (error) {
+      console.error("Error running sequence:", error);
+      toast({
+        title: "Run Error",
+        description:
+          error.message || "An error occurred while running the sequence.",
+        variant: "destructive",
+      });
     }
   };
 
-  // Stop playback
-  const stopPlayback = () => {
-    setIsPlaying(false);
-    setCurrentStepIndex(-1);
-  };
+  if (isLoading && !currentSequence) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <p>Loading sequence editor...</p>
+      </div>
+    );
+  }
 
-  // Record a new step
-  const recordStep = (
-    deviceId: string,
-    action: string,
-    value: number,
-    duration = 0
-  ) => {
-    if (!isRecording || !recordStartTime) return;
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen text-red-500">
+        <p>Error loading sequence data: {error}</p>
+        <button
+          onClick={() =>
+            configId &&
+            loadConfigAndInitializeSequence(
+              configId,
+              initialSequenceId !== "new-sequence"
+                ? initialSequenceId
+                : undefined
+            )
+          }
+          className="mt-4 p-2 bg-blue-500 text-white rounded"
+        >
+          Retry Load
+        </button>
+      </div>
+    );
+  }
 
-    const device = devices.find((d) => d.id === deviceId);
-    if (!device) return;
+  if (!configId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen text-red-500">
+        <p>Configuration ID is missing. Please select a configuration first.</p>
+      </div>
+    );
+  }
 
-    const timestamp = Date.now() - recordStartTime;
+  if (
+    activeConfigId === configId &&
+    !currentSequence &&
+    !isLoading &&
+    initialSequenceId !== "new-sequence"
+  ) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen">
+        <p>Sequence not found or not yet created for this configuration.</p>
+        <button
+          onClick={() =>
+            createNewSequence("New Sequence", "Describe your sequence here")
+          }
+          className="mt-4 p-2 bg-green-500 text-white rounded"
+          disabled={availableDevices.length === 0}
+        >
+          Create New Sequence
+        </button>
+        {availableDevices.length === 0 && (
+          <p className="text-sm text-gray-500 mt-2">
+            Waiting for device information to be loaded...
+          </p>
+        )}
+      </div>
+    );
+  }
 
-    const newStep: SequenceStep = {
-      id: `step-${Date.now()}`,
-      deviceId,
-      deviceType: device.type,
-      deviceName: device.name,
-      action,
-      value,
-      duration,
-      timestamp,
-    };
-
-    setSequence((prev) => ({
-      ...prev,
-      steps: [...prev.steps, newStep],
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  // Update sequence metadata
-  const updateSequence = (data: Partial<Sequence>) => {
-    setSequence((prev) => ({
-      ...prev,
-      ...data,
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  // Save sequence
-  const saveSequence = () => {
-    // In a real app, this would save to the API
-    toast({
-      title: "Sequence saved",
-      description: `"${sequence.name}" has been saved successfully`,
-    });
-  };
-
-  // Update a step
-  const updateStep = (stepId: string, data: Partial<SequenceStep>) => {
-    setSequence((prev) => ({
-      ...prev,
-      steps: prev.steps.map((step) =>
-        step.id === stepId ? { ...step, ...data } : step
-      ),
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  // Delete a step
-  const deleteStep = (stepId: string) => {
-    setSequence((prev) => ({
-      ...prev,
-      steps: prev.steps.filter((step) => step.id !== stepId),
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  // Reorder steps
-  const reorderSteps = (steps: SequenceStep[]) => {
-    setSequence((prev) => ({
-      ...prev,
-      steps,
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  // Add a step manually
-  const addStep = (step: Omit<SequenceStep, "id" | "timestamp">) => {
-    const lastStep = sequence.steps[sequence.steps.length - 1];
-    const timestamp = lastStep
-      ? lastStep.timestamp + lastStep.duration + 500
-      : 0;
-
-    const newStep: SequenceStep = {
-      id: `step-${Date.now()}`,
-      ...step,
-      timestamp,
-    };
-
-    setSequence((prev) => ({
-      ...prev,
-      steps: [...prev.steps, newStep],
-      updatedAt: new Date().toISOString(),
-    }));
-  };
+  if (!currentSequence && activeTab !== "devices") {
+    if (isLoading)
+      return (
+        <div className="flex items-center justify-center h-screen">
+          <p>Initializing sequence...</p>
+        </div>
+      );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950">
-      <div className="container mx-auto p-4 md:p-6">
-        {/* Header with back button, title, and save button */}
+    <div className="flex flex-col h-screen p-4 md:p-6 lg:p-8 bg-background text-foreground">
+      <Toaster />
+      {currentSequence && (
         <SequenceHeader
-          sequence={sequence}
-          updateSequence={updateSequence}
-          onSave={saveSequence}
-          onBack={() => router.push(`/dashboard?config=${configId}`)}
+          sequenceName={currentSequence.name}
+          sequenceDescription={currentSequence.description || ""}
+          onNameChange={(name) =>
+            useSequenceStore.getState().updateSequenceDetails({ name })
+          }
+          onDescriptionChange={(description) =>
+            useSequenceStore.getState().updateSequenceDetails({ description })
+          }
+          onBack={handleGoBack}
         />
-
-        {/* Main content */}
-        <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left panel - Devices */}
-          <div className="lg:col-span-1">
-            <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/50 rounded-xl border border-white/20 dark:border-gray-700/30 shadow-lg p-4">
-              <h2 className="text-lg font-semibold mb-4 flex items-center">
-                <Settings className="h-5 w-5 mr-2 text-gray-500 dark:text-gray-400" />
-                Devices
-              </h2>
-              <SequenceDevicePanel
-                devices={devices}
-                isRecording={isRecording}
-                onRecordStep={recordStep}
-                currentStep={
-                  currentStepIndex >= 0
-                    ? sequence.steps[currentStepIndex]
-                    : null
-                }
-                isPlaying={isPlaying}
-              />
-            </div>
-          </div>
-
-          {/* Right panel - Sequence editor and controls */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Playback controls */}
-            <SequenceControls
-              isRecording={isRecording}
-              isPlaying={isPlaying}
-              playbackSpeed={playbackSpeed}
-              onToggleRecording={toggleRecording}
-              onTogglePlayback={togglePlayback}
-              onStopPlayback={stopPlayback}
-              onChangeSpeed={setPlaybackSpeed}
-              sequenceLength={
-                sequence.steps.length > 0
-                  ? sequence.steps[sequence.steps.length - 1].timestamp + 1000
-                  : 0
+      )}
+      <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4 overflow-hidden">
+        <div className="lg:col-span-1 flex flex-col gap-4 overflow-y-auto">
+          <SequenceControls
+            onSave={useSequenceStore.getState().saveSequenceToConfig}
+            isSaving={isLoading}
+            canSave={!!currentSequence && !!activeConfigId}
+            onAddStep={() => {
+              toast({
+                title: "Add Step Clicked",
+                description: "Implement Add Step Dialog.",
+              });
+            }}
+            isRecording={isRecording}
+            onToggleRecording={toggleRecording}
+            isPlaying={sequenceRunner.isRunning}
+            onTogglePlayback={() =>
+              sequenceRunner.isRunning
+                ? sequenceRunner.isPaused
+                  ? sequenceRunner.resumeSequence()
+                  : sequenceRunner.pauseSequence()
+                : runCurrentSequence()
+            }
+            onStopPlayback={() => sequenceRunner.stopSequence()}
+            playbackSpeed={playbackSpeed}
+            onPlaybackSpeedChange={(speed) => {
+              setPlaybackSpeed(speed);
+              if (sequenceRunner.isRunning) {
+                sequenceRunner.setPlaybackSpeed(speed);
               }
-              currentTime={
-                currentStepIndex >= 0
-                  ? sequence.steps[currentStepIndex].timestamp
-                  : 0
-              }
-            />
+            }}
+            hasSteps={currentSequence?.steps?.length > 0}
+          />
 
-            {/* Sequence editor tabs */}
-            <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/50 rounded-xl border border-white/20 dark:border-gray-700/30 shadow-lg">
-              <Tabs
-                value={activeTab}
-                onValueChange={setActiveTab}
-                className="w-full"
-              >
-                <div className="px-4 pt-4">
-                  <TabsList className="grid grid-cols-2 mb-2">
-                    <TabsTrigger value="timeline" className="text-sm">
-                      <Clock className="h-4 w-4 mr-2" />
-                      Timeline
-                    </TabsTrigger>
-                    <TabsTrigger value="steps" className="text-sm">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Steps
-                    </TabsTrigger>
-                  </TabsList>
-                </div>
-
-                <TabsContent value="timeline" className="p-4 pt-2">
-                  <SequenceTimeline
-                    steps={sequence.steps}
-                    currentStepIndex={currentStepIndex}
-                    onUpdateStep={updateStep}
-                    onDeleteStep={deleteStep}
-                    onReorderSteps={reorderSteps}
-                  />
-                </TabsContent>
-
-                <TabsContent value="steps" className="p-4 pt-2">
-                  <SequenceStepList
-                    steps={sequence.steps}
-                    devices={devices}
-                    onUpdateStep={updateStep}
-                    onDeleteStep={deleteStep}
-                    onAddStep={addStep}
-                    currentStepIndex={currentStepIndex}
-                  />
-                </TabsContent>
-              </Tabs>
+          {/* Show sequence run status if a sequence is running */}
+          {sequenceRunner.isRunning && (
+            <div className="bg-card rounded-lg border p-4">
+              <div className="text-sm font-medium mb-2">
+                Running: Step {sequenceRunner.currentStepIndex + 1} of{" "}
+                {sequenceRunner.totalSteps}
+              </div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all duration-300 ease-in-out"
+                  style={{
+                    width: `${
+                      (sequenceRunner.currentStepIndex /
+                        Math.max(1, sequenceRunner.totalSteps)) *
+                      100
+                    }%`,
+                  }}
+                />
+              </div>
             </div>
-          </div>
+          )}
+        </div>
+
+        <div className="lg:col-span-2 flex flex-col overflow-hidden">
+          <Tabs
+            value={activeTab}
+            onValueChange={setActiveTab}
+            className="flex flex-col flex-grow overflow-hidden"
+          >
+            <TabsList className="shrink-0">
+              <TabsTrigger value="timeline">
+                <Clock className="w-4 h-4 mr-2" /> Timeline View
+              </TabsTrigger>
+              <TabsTrigger value="steps">
+                <Plus className="w-4 h-4 mr-2" /> Step List
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent
+              value="timeline"
+              className="flex-grow overflow-y-auto p-1"
+            >
+              {currentSequence ? (
+                <SequenceTimeline
+                  steps={currentSequence.steps}
+                  devices={availableDevices}
+                  onStepSelect={(stepId) =>
+                    console.log("Step selected:", stepId)
+                  }
+                />
+              ) : (
+                <p>No sequence loaded or steps available for timeline view.</p>
+              )}
+            </TabsContent>
+            <TabsContent value="steps" className="flex-grow overflow-y-auto">
+              {currentSequence ? (
+                <SequenceStepList
+                  steps={currentSequence.steps}
+                  devices={availableDevices}
+                  onDeleteStep={(stepId) =>
+                    useSequenceStore.getState().deleteStep(stepId)
+                  }
+                  onReorderSteps={useSequenceStore.getState().reorderSteps}
+                />
+              ) : (
+                <p>No sequence loaded or steps available for list view.</p>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
-      <Toaster />
     </div>
   );
 }

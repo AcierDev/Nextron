@@ -1,0 +1,88 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Microcontroller Network Implementation
+
+## Network Stack
+
+The ESP32 firmware implements a network stack for communication with the desktop application:
+
+1. **WiFi Connectivity**
+   - Implemented in [wifi_manager.cpp](mdc:firmware/microcontroller/src/network/wifi_manager.cpp)
+   - Handles connection to configured WiFi network
+   - Auto-reconnect functionality
+   - IP address reporting
+
+2. **WebSocket Server**
+   - Uses AsyncWebServer and AsyncWebSocket libraries
+   - WebSocket endpoint at `/ws`
+   - Event-based message handling
+   - JSON message format
+
+## Communication Flow
+
+1. **Connection Establishment**
+   - ESP32 connects to configured WiFi network
+   - ESP32 starts WebSocket server
+   - Desktop app connects to WebSocket server
+
+2. **Message Processing**
+   - Desktop sends JSON commands to ESP32
+   - ESP32 parses command with ArduinoJson library
+   - Commands are routed to appropriate handler
+   - Response is sent back as JSON
+
+3. **Component Commands**
+   - Component configuration
+   - State reading and updates
+   - Action execution (movement, etc.)
+
+## Implementation Details
+
+### WiFi Connection Management
+```cpp
+// From wifi_manager.cpp
+void initWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  
+  // Connection timeout and retry logic
+  // ...
+}
+
+void updateWiFiStatus() {
+  // Check if WiFi is connected
+  // Auto-reconnect if disconnected
+  // ...
+}
+```
+
+### WebSocket Event Handling
+```cpp
+// From message_handler.cpp
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
+                     AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      // Handle new client connection
+      break;
+    case WS_EVT_DISCONNECT:
+      // Handle client disconnection
+      break;
+    case WS_EVT_DATA:
+      // Process received data
+      // Parse JSON and route to appropriate handler
+      break;
+    // ...
+  }
+}
+```
+
+## Security Considerations
+
+- The firmware currently uses plaintext WiFi credentials
+- No authentication mechanism for the WebSocket server
+- Intended for use on a local network only

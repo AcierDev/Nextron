@@ -1,0 +1,107 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Logging Standards
+
+## Logger Utility
+
+The application uses a centralized logging utility for consistent and colorful console output:
+
+- Located at [main/lib/logger.ts](mdc:main/lib/logger.ts)
+- Provides color-coded log levels (info, success, warn, error, debug)
+- Automatically adds timestamps and module context to all logs
+
+## Usage Guidelines
+
+### Creating a Logger
+
+```typescript
+import createLogger from "../lib/logger";
+
+// Create a logger for your module
+const logger = createLogger("Module Name");
+
+// Create a child logger for a submodule
+const childLogger = logger.child("Submodule");
+```
+
+### Log Levels
+
+Use appropriate log levels for different types of messages:
+
+1. **info** (blue): General information about application flow
+   ```typescript
+   logger.info("Processing request", requestData);
+   ```
+
+2. **success** (green): Successful operations and completions
+   ```typescript
+   logger.success("Configuration saved successfully");
+   ```
+
+3. **warn** (yellow): Non-critical issues that don't interrupt execution
+   ```typescript
+   logger.warn("Connection attempt timed out, retrying...");
+   ```
+
+4. **error** (red): Errors and exceptions that affect functionality
+   ```typescript
+   logger.error("Failed to save configuration:", error);
+   ```
+
+5. **debug** (magenta): Detailed information for troubleshooting (dev-only)
+   ```typescript
+   logger.debug("Internal state:", stateData);
+   ```
+
+## Best Practices
+
+1. **Always include context**: Use descriptive messages that include relevant IDs/names
+   ```typescript
+   // Good
+   logger.info(`Processing configuration: ${configName} (${configId})`);
+   
+   // Avoid
+   logger.info("Processing configuration");
+   ```
+
+2. **Log objects separately**: Pass objects as additional parameters rather than concatenating
+   ```typescript
+   // Good
+   logger.info("Received data:", data);
+   
+   // Avoid
+   logger.info(`Received data: ${JSON.stringify(data)}`);
+   ```
+
+3. **Use appropriate log level**: Don't use info for errors or debug for warnings
+
+4. **Structure logs consistently**: Follow a consistent format for similar operations
+   ```typescript
+   logger.info(`Starting operation: ${operationName}`);
+   // ... operation code ...
+   logger.success(`Completed operation: ${operationName}`);
+   ```
+
+5. **Use child loggers**: For complex modules, use child loggers to add context
+   ```typescript
+   const deviceLogger = logger.child(`Device:${deviceId}`);
+   deviceLogger.info("Connecting to device");
+   ```
+
+## Implementation
+
+Replace all direct console.log/error/warn calls with the appropriate logger methods:
+
+```typescript
+// Before
+console.log(`[Module] Processing ${itemId}`);
+console.error(`[Module] Error:`, error);
+
+// After
+const logger = createLogger("Module");
+logger.info(`Processing ${itemId}`);
+logger.error("Error:", error);
+```

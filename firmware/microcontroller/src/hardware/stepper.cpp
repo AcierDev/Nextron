@@ -32,10 +32,46 @@ void updateStepperPositions() {
 
   for (auto &stepperConfig : configuredSteppers) {
     if (stepperConfig.stepper) {
+      // Get current position
+      long currentPos = stepperConfig.stepper->getCurrentPosition();
+
+      // Check if a movement has completed
+      if (stepperConfig.isActionPending) {
+        // Check if stepper has stopped moving and is at or near target position
+        bool hasArrived = !stepperConfig.stepper->isRunning();
+
+        // If stepper has finished moving
+        if (hasArrived) {
+          stepperConfig.isActionPending = false;
+
+          // Send completion notification if we have a command ID
+          if (!stepperConfig.pendingCommandId.isEmpty()) {
+            StaticJsonDocument<256> completionMsg;
+            completionMsg["type"] = "actionComplete";
+            completionMsg["componentId"] = stepperConfig.id;
+            completionMsg["componentGroup"] = "steppers";
+            completionMsg["commandId"] = stepperConfig.pendingCommandId;
+            completionMsg["success"] = true;
+            completionMsg["position"] = currentPos;
+
+            String completionJson;
+            serializeJson(completionMsg, completionJson);
+            ws.textAll(completionJson);
+
+            Serial.printf(
+                "Stepper %s: Action completed for command %s at position %ld\n",
+                stepperConfig.id.c_str(),
+                stepperConfig.pendingCommandId.c_str(), currentPos);
+
+            // Clear the pending command ID
+            stepperConfig.pendingCommandId = "";
+          }
+        }
+      }
+
       // Check and report position periodically
       if (now - stepperConfig.lastPositionReportTime >=
           stepperPositionReportInterval) {
-        long currentPos = stepperConfig.stepper->getCurrentPosition();
         if (currentPos != stepperConfig.currentPosition) {
           stepperConfig.currentPosition = currentPos;
           stepperConfig.lastPositionReportTime = now;

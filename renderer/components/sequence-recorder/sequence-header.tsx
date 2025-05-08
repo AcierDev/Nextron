@@ -1,98 +1,134 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Save, Edit2, Check } from "lucide-react";
-import type { Sequence } from "./sequence-page";
+import { ArrowLeft, Edit2, Check } from "lucide-react";
 
 interface SequenceHeaderProps {
-  sequence: Sequence;
-  updateSequence: (data: Partial<Sequence>) => void;
-  onSave: () => void;
-  onBack: () => void;
+  sequenceName: string;
+  sequenceDescription: string;
+  onNameChange: (name: string) => void;
+  onDescriptionChange: (description: string) => void;
+  onBack?: () => void;
 }
 
 export function SequenceHeader({
-  sequence,
-  updateSequence,
-  onSave,
+  sequenceName,
+  sequenceDescription,
+  onNameChange,
+  onDescriptionChange,
   onBack,
 }: SequenceHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(sequence.name);
-  const [editDescription, setEditDescription] = useState(sequence.description);
+  const [editName, setEditName] = useState(sequenceName);
+  const [editDescription, setEditDescription] = useState(sequenceDescription);
 
-  const handleSaveEdit = () => {
-    updateSequence({
-      name: editName,
-      description: editDescription,
-    });
+  useEffect(() => {
+    setEditName(sequenceName);
+  }, [sequenceName]);
+
+  useEffect(() => {
+    setEditDescription(sequenceDescription);
+  }, [sequenceDescription]);
+
+  const handleApplyChanges = () => {
+    onNameChange(editName);
+    onDescriptionChange(editDescription);
     setIsEditing(false);
   };
 
+  const handleBackClick = () => {
+    if (onBack) {
+      onBack();
+    } else {
+      console.warn("SequenceHeader: onBack prop not provided.");
+    }
+  };
+
   return (
-    <header className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={onBack}
-          className="shrink-0"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+    <header className="flex flex-col md:flex-row md:justify-between md:items-start gap-4">
+      <div className="flex items-center gap-2 flex-grow">
+        {onBack && (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleBackClick}
+            className="shrink-0"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        )}
         {isEditing ? (
           <div className="flex-1 space-y-2">
             <Input
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              className="text-xl font-bold bg-white/80 dark:bg-gray-800/80 border-gray-300/50 dark:border-gray-600/50"
+              placeholder="Sequence Name"
+              className="text-xl font-bold bg-background border-border"
             />
             <Textarea
               value={editDescription}
               onChange={(e) => setEditDescription(e.target.value)}
-              className="text-sm text-gray-500 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 border-gray-300/50 dark:border-gray-600/50 min-h-[60px]"
-              placeholder="Describe your sequence..."
+              placeholder="Sequence Description..."
+              className="text-sm text-muted-foreground bg-background border-border min-h-[60px]"
             />
           </div>
         ) : (
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              {sequence.name}
+          <div
+            className="flex-grow cursor-pointer group"
+            onClick={() => setIsEditing(true)}
+            title="Click to edit"
+          >
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-foreground">
+                {sequenceName || "Untitled Sequence"}
+              </h1>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setIsEditing(true)}
-                className="h-6 w-6 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEditing(true);
+                }}
+                className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label="Edit name and description"
               >
-                <Edit2 className="h-3.5 w-3.5" />
+                <Edit2 className="h-4 w-4" />
               </Button>
-            </h1>
-            <p className="text-gray-500 dark:text-gray-400">
-              {sequence.description}
+            </div>
+            <p className="text-muted-foreground text-sm">
+              {sequenceDescription || "No description."}
             </p>
           </div>
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        {isEditing ? (
-          <Button onClick={handleSaveEdit} className="flex items-center gap-2">
-            <Check className="h-4 w-4" />
-            Apply Changes
-          </Button>
-        ) : (
+      {isEditing && (
+        <div className="flex items-center gap-2 shrink-0 self-start md:self-center">
           <Button
-            onClick={onSave}
-            className="flex items-center gap-2 bg-blue-600/90 hover:bg-blue-700 text-white"
+            onClick={handleApplyChanges}
+            className="flex items-center gap-2"
+            size="sm"
           >
-            <Save className="h-4 w-4" />
-            Save Sequence
+            <Check className="h-4 w-4" />
+            Apply
           </Button>
-        )}
-      </div>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setIsEditing(false);
+              setEditName(sequenceName);
+              setEditDescription(sequenceDescription);
+            }}
+            size="sm"
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
     </header>
   );
 }

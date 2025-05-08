@@ -100,7 +100,7 @@ export default function FirmwareSetupPage() {
   }, []);
 
   const handleSkip = () => {
-    router.push("/configurations");
+    router.push("/connection");
   };
 
   // Parse PlatformIO output to update UI accordingly

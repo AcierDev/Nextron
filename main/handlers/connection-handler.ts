@@ -1,5 +1,10 @@
 import { ipcMain, BrowserWindow } from "electron";
 import WebSocket from "ws";
+import { handleActionCompletionMessage } from "./sequence-handler";
+import createLogger from "../lib/logger";
+
+// Create a logger instance for the Connection Handler
+const logger = createLogger("Connection Handler");
 
 // Store the connection state
 let connectionState = {
@@ -20,13 +25,13 @@ function connectWebSocket(url: string): Promise<boolean> {
     disconnectWebSocket();
 
     try {
-      console.log(`[Connection Handler] Connecting to WebSocket: ${url}`);
+      logger.info(`Connecting to WebSocket: ${url}`);
       wsConnection = new WebSocket(url);
 
       // Set a connection timeout
       const connectionTimeout = setTimeout(() => {
         if (wsConnection && wsConnection.readyState !== WebSocket.OPEN) {
-          console.error("[Connection Handler] WebSocket connection timeout");
+          logger.error("WebSocket connection timeout");
           wsConnection.close();
           wsConnection = null;
           reject(new Error("Connection timeout"));
@@ -35,7 +40,7 @@ function connectWebSocket(url: string): Promise<boolean> {
 
       wsConnection.on("open", () => {
         clearTimeout(connectionTimeout);
-        console.log("[Connection Handler] WebSocket connection established");
+        logger.success("WebSocket connection established");
 
         // Start ping interval to keep connection alive
         if (pingInterval) {
@@ -52,9 +57,9 @@ function connectWebSocket(url: string): Promise<boolean> {
                   timestamp: Date.now(),
                 })
               );
-              console.log("[Connection Handler] Sent ping");
+              logger.debug("Sent ping");
             } catch (err) {
-              console.error("[Connection Handler] Failed to send ping:", err);
+              logger.error("Failed to send ping:", err);
             }
           } else {
             if (pingInterval) {
@@ -78,13 +83,43 @@ function connectWebSocket(url: string): Promise<boolean> {
       wsConnection.on("message", (data) => {
         try {
           const message = data.toString();
-          console.log("[Connection Handler] Received message:", message);
+          logger.debug("Received message:", message);
+
+          // Check if message looks like valid JSON (starts with { or [)
+          let jsonMessage: any = null;
+          let isJson =
+            message.trim().startsWith("{") || message.trim().startsWith("[");
+
+          if (isJson) {
+            try {
+              jsonMessage = JSON.parse(message);
+
+              // If this is an action completion message, handle it
+              if (jsonMessage.type === "actionComplete") {
+                handleActionCompletionMessage(jsonMessage);
+              }
+            } catch (jsonError) {
+              // If parsing fails, it's a plain text message, not an error
+              logger.debug("Message is not valid JSON, treating as plain text");
+              isJson = false;
+            }
+          }
 
           // Forward message to all renderer processes
           const windows = BrowserWindow.getAllWindows();
           windows.forEach((window) => {
             if (!window.isDestroyed()) {
-              window.webContents.send("ws-message", message);
+              // For non-JSON messages, wrap them in a simple object
+              if (!isJson) {
+                const wrappedMessage = JSON.stringify({
+                  type: "plaintext",
+                  message: message,
+                  timestamp: Date.now(),
+                });
+                window.webContents.send("ws-message", wrappedMessage);
+              } else {
+                window.webContents.send("ws-message", message);
+              }
             }
           });
 
@@ -93,14 +128,12 @@ function connectWebSocket(url: string): Promise<boolean> {
             connectionState.lastConnected = Date.now();
           }
         } catch (err) {
-          console.error("[Connection Handler] Error processing message:", err);
+          logger.error("Error processing message:", err);
         }
       });
 
       wsConnection.on("close", (code, reason) => {
-        console.log(
-          `[Connection Handler] WebSocket closed: ${code}, ${reason}`
-        );
+        logger.warn(`WebSocket closed: ${code}, ${reason}`);
 
         if (pingInterval) {
           clearInterval(pingInterval);
@@ -131,7 +164,7 @@ function connectWebSocket(url: string): Promise<boolean> {
       });
 
       wsConnection.on("error", (error) => {
-        console.error("[Connection Handler] WebSocket error:", error);
+        logger.error("WebSocket error:", error);
 
         // Notify all renderer processes
         const windows = BrowserWindow.getAllWindows();
@@ -154,7 +187,7 @@ function connectWebSocket(url: string): Promise<boolean> {
         reject(error);
       });
     } catch (error) {
-      console.error("[Connection Handler] Failed to create WebSocket:", error);
+      logger.error("Failed to create WebSocket:", error);
       reject(error);
     }
   });
@@ -166,9 +199,10 @@ function disconnectWebSocket() {
     try {
       if (wsConnection.readyState === WebSocket.OPEN) {
         wsConnection.close();
+        logger.info("WebSocket connection closed");
       }
     } catch (err) {
-      console.error("[Connection Handler] Error closing WebSocket:", err);
+      logger.error("Error closing WebSocket:", err);
     }
     wsConnection = null;
   }
@@ -180,34 +214,35 @@ function disconnectWebSocket() {
 }
 
 // Function to send a message through the WebSocket
-function sendMessage(message: object): boolean {
+export function sendMessage(message: object): boolean {
   if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
-    console.error(
-      "[Connection Handler] Cannot send message: WebSocket not open"
-    );
+    logger.error("Cannot send message: WebSocket not open");
     return false;
   }
 
   try {
     const jsonMessage = JSON.stringify(message);
     wsConnection.send(jsonMessage);
-    console.log("[Connection Handler] Sent message:", jsonMessage);
+    logger.debug("Sent message:", jsonMessage);
     return true;
   } catch (err) {
-    console.error("[Connection Handler] Error sending message:", err);
+    logger.error("Error sending message:", err);
     return false;
   }
 }
 
 export function setupConnectionHandlers() {
+  logger.info("Setting up connection IPC handlers");
+
   // Connect to WebSocket
   ipcMain.handle("connect-websocket", async (_, ipOctet: string) => {
     try {
       const wsUrl = `ws://192.168.1.${ipOctet}/ws`;
+      logger.info(`Attempting connection to ${wsUrl}`);
       await connectWebSocket(wsUrl);
       return { success: true, ipOctet, websocketUrl: wsUrl };
     } catch (error) {
-      console.error("[Connection Handler] Connection failed:", error);
+      logger.error("Connection failed:", error);
       return { success: false, error: error.message };
     }
   });
@@ -220,6 +255,7 @@ export function setupConnectionHandlers() {
 
   // Disconnect WebSocket
   ipcMain.handle("disconnect-websocket", () => {
+    logger.info("Disconnecting WebSocket");
     disconnectWebSocket();
 
     connectionState = {
@@ -243,8 +279,8 @@ export function setupConnectionHandlers() {
       connectionState.connected &&
       now - connectionState.lastConnected > STALE_CONNECTION_THRESHOLD
     ) {
-      console.log(
-        `[Connection Handler] Connection considered stale (${
+      logger.warn(
+        `Connection considered stale (${
           (now - connectionState.lastConnected) / 1000
         }s old)`
       );
@@ -256,22 +292,22 @@ export function setupConnectionHandlers() {
       };
     }
 
-    // Add WebSocket readyState to the status
-    const status = {
-      ...connectionState,
+    return {
+      success: true,
+      connected: connectionState.connected,
+      ipOctet: connectionState.ipOctet,
+      lastConnected: connectionState.lastConnected,
+      websocketUrl: connectionState.websocketUrl,
       readyState: wsConnection ? wsConnection.readyState : null,
     };
-
-    console.log("[Connection Handler] Returning connection status:", status);
-    return status;
   });
 
   // Update connection timestamp (keep alive)
   ipcMain.handle("keep-connection-alive", () => {
     if (connectionState.connected) {
       connectionState.lastConnected = Date.now();
-      console.log(
-        `[Connection Handler] Connection timestamp updated: ${connectionState.lastConnected}`
+      logger.debug(
+        `Connection timestamp updated: ${connectionState.lastConnected}`
       );
 
       // Send a ping to verify the connection is alive
@@ -285,10 +321,7 @@ export function setupConnectionHandlers() {
             })
           );
         } catch (err) {
-          console.error(
-            "[Connection Handler] Failed to send ping during keep-alive:",
-            err
-          );
+          logger.error("Failed to send ping during keep-alive:", err);
           return { success: false, error: err.message };
         }
       }
@@ -296,18 +329,5 @@ export function setupConnectionHandlers() {
     return { success: true };
   });
 
-  // Clear connection status
-  ipcMain.handle("clear-connection-status", () => {
-    disconnectWebSocket();
-
-    connectionState = {
-      connected: false,
-      ipOctet: "",
-      lastConnected: 0,
-      websocketUrl: "",
-    };
-
-    console.log("[Connection Handler] Connection status cleared");
-    return { success: true };
-  });
+  logger.success("Connection handlers registered");
 }

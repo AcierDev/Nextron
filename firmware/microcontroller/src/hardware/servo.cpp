@@ -88,53 +88,94 @@ void setServoPulseWidth(ServoConfig &servoConfig, int pulseWidth_us) {
 // Update servo movements based on speed and target positions
 void updateServoMovements() {
   unsigned long currentTime = millis();
-  static unsigned long lastReportTime = 0;  // For throttling position updates
+  static unsigned long lastReportTime = 0;
 
   for (auto &servoConfig : configuredServos) {
+    // If it's a timed sequence action that is pending
+    if (servoConfig.isActionPending && servoConfig.calculatedMoveDuration > 0) {
+      if (currentTime - servoConfig.movementStartTime >=
+          servoConfig.calculatedMoveDuration) {
+        // Time is up for this sequenced move
+        Serial.printf(
+            "Servo %s: Timed move for cmd %s complete. Duration: %lu ms. "
+            "Forcing to target %d.\n",
+            servoConfig.id.c_str(), servoConfig.pendingCommandId.c_str(),
+            servoConfig.calculatedMoveDuration, servoConfig.targetAngle);
+
+        // Force state to target
+        servoConfig.currentAngle = servoConfig.targetAngle;
+        servoConfig.currentPulseWidth =
+            angleToPulseWidth(servoConfig, servoConfig.targetAngle);
+        setServoPulseWidth(
+            servoConfig,
+            servoConfig.currentPulseWidth);  // Final electrical command
+
+        servoConfig.isMoving = false;
+        servoConfig.isActionPending = false;
+
+        // Send actionComplete message
+        StaticJsonDocument<256> completionMsg;
+        completionMsg["type"] = "actionComplete";
+        completionMsg["componentId"] = servoConfig.id;
+        completionMsg["componentGroup"] = "servos";
+        completionMsg["commandId"] = servoConfig.pendingCommandId;
+        completionMsg["success"] = true;
+        completionMsg["angle"] = servoConfig.currentAngle;
+        String completionJson;
+        serializeJson(completionMsg, completionJson);
+        ws.textAll(completionJson);
+
+        servoConfig.pendingCommandId = "";
+        servoConfig.calculatedMoveDuration = 0;  // Clear duration
+
+        // Send a general status update
+        StaticJsonDocument<128> updateDoc;
+        updateDoc["id"] = servoConfig.id;
+        updateDoc["angle"] = servoConfig.currentAngle;
+        updateDoc["status"] = "IDLE";
+        updateDoc["componentGroup"] = "servos";
+        String output;
+        serializeJson(updateDoc, output);
+        ws.textAll(output);
+        continue;  // Move to next servo
+      }
+      // If time is not up, isMoving should be true (set by message_handler) to
+      // allow PWM stepping
+    }
+
+    // Standard PWM stepping logic (applies to manual moves, and to sequence
+    // moves during their calculatedDuration)
     if (!servoConfig.isAttached || !servoConfig.isMoving) {
-      continue;  // Skip if not attached or not supposed to be moving
-    }
-
-    // Ensure targetPulseWidth is valid based on targetAngle
-    // This handles cases where targetAngle might be set but targetPulseWidth
-    // wasn't updated
-    int calculatedTargetPulseWidth =
-        angleToPulseWidth(servoConfig, servoConfig.targetAngle);
-    if (servoConfig.targetPulseWidth != calculatedTargetPulseWidth) {
-      servoConfig.targetPulseWidth = calculatedTargetPulseWidth;
-    }
-
-    if (servoConfig.currentPulseWidth == servoConfig.targetPulseWidth) {
-      servoConfig.isMoving = false;  // Reached target
-
-      // Send a final completion update (only if it was moving)
-      // This prevents spamming "COMPLETE" if it was already at target.
-      StaticJsonDocument<128> updateDoc;
-      updateDoc["id"] = servoConfig.id;
-      updateDoc["angle"] = servoConfig.currentAngle;
-      updateDoc["status"] = "COMPLETE";
-      updateDoc["componentGroup"] = "servos";
-      String output;
-      serializeJson(updateDoc, output);
-      ws.textAll(output);  // Consider sending only to the client that initiated
-                           // if possible
       continue;
     }
 
-    // Calculate delay based on speed: higher speed = shorter delay
-    // This delay determines how often we update the pulse width
-    int delayBetweenSteps = map(servoConfig.speed, 1, 100, 20,
-                                2);  // e.g., 20ms (slow) to 2ms (fast)
+    // This check is important for manual moves, or if a sequence move finishes
+    // by reaching pulse target before time (unlikely with current logic)
+    if (servoConfig.currentPulseWidth == servoConfig.targetPulseWidth &&
+        !servoConfig.isActionPending) {
+      servoConfig.isMoving = false;
+      // For manual moves that reach target, send a general status update
+      StaticJsonDocument<128> updateDoc;
+      updateDoc["id"] = servoConfig.id;
+      updateDoc["angle"] = servoConfig.currentAngle;
+      updateDoc["status"] = "IDLE";
+      updateDoc["componentGroup"] = "servos";
+      String output;
+      serializeJson(updateDoc, output);
+      ws.textAll(output);
+      continue;
+    }
+
+    // Calculate delay based on servoConfig.speed (which is 100 for sequences)
+    int delayBetweenSteps =
+        map(servoConfig.speed, 1, 100, 20, 2);  // 2ms for speed 100
     if (currentTime - servoConfig.lastMoveTime <
         (unsigned long)delayBetweenSteps) {
       continue;
     }
 
-    // Calculate pulse width change amount for this step
-    // Higher speed = larger change in pulse width per step
-    int pulseWidthChangePerCycle = map(servoConfig.speed, 1, 100, 1,
-                                       25);  // e.g., 1µs (slow) to 25µs (fast)
-
+    int pulseWidthChangePerCycle =
+        map(servoConfig.speed, 1, 100, 1, 25);  // 25us for speed 100
     int direction =
         (servoConfig.targetPulseWidth > servoConfig.currentPulseWidth) ? 1 : -1;
     int remainingPulseWidth =
@@ -144,25 +185,21 @@ void updateServoMovements() {
     if (actualChange > 0) {
       int newPulseWidth =
           servoConfig.currentPulseWidth + (direction * actualChange);
-      setServoPulseWidth(
-          servoConfig,
-          newPulseWidth);  // This updates currentPulseWidth and currentAngle
+      setServoPulseWidth(servoConfig, newPulseWidth);
       servoConfig.lastMoveTime = currentTime;
 
-      // Throttle position updates to avoid flooding WebSocket
-      if (currentTime - lastReportTime >
-          100) {  // e.g., update every 100ms (10Hz)
+      if (currentTime - lastReportTime > 100) {
         lastReportTime = currentTime;
         StaticJsonDocument<128> updateDoc;
         updateDoc["id"] = servoConfig.id;
-        updateDoc["angle"] =
-            servoConfig.currentAngle;  // Report the latest angle
+        updateDoc["angle"] = servoConfig.currentAngle;
         updateDoc["componentGroup"] = "servos";
         String output;
         serializeJson(updateDoc, output);
         ws.textAll(output);
       }
-    } else {  // Should not happen if remainingPulseWidth > 0, but as a fallback
+    } else if (!servoConfig.isActionPending) {  // If not a timed action and no
+                                                // change, stop moving
       servoConfig.isMoving = false;
     }
   }

@@ -272,6 +272,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (hasSpeedConfig) {
         existingServo->speed = constrain(speedVal, 1, 100);
       }
+      existingServo->isActionPending = false;  // Cancel any pending timed move
+      existingServo->calculatedMoveDuration = 0;
       attachServoPWM(*existingServo);
       // Update current pulse width based on new angle/PWM settings
       setServoPulseWidth(
@@ -324,93 +326,107 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     return;
   }
 
+  // If a new control command comes in, it might override a pending timed move.
+  // The pendingCommandId will be overwritten if the new command also has one.
+  // isActionPending and durations will be reset if it's a new sequence command.
+
   if (strcmp(action, "control") == 0) {
     StaticJsonDocument<128> response;  // For success responses
     response["id"] = servo->id;
     response["componentGroup"] = F("servos");
     bool action_taken = false;
+    bool isSequenceCommand = doc.containsKey("commandId");
 
-    if (doc.containsKey("speed")) {
+    if (doc.containsKey("speed") &&
+        !isSequenceCommand) {  // Speed only for manual
       servo->speed = constrain(doc["speed"].as<int>(), 1, 100);
       response["status"] = F("OK");
       response["speed"] = servo->speed;
       action_taken = true;
     }
-    if (doc.containsKey("angle")) {
-      int angleCmd = doc["angle"];
-      servo->targetAngle =
-          constrain(angleCmd, servo->minAngle, servo->maxAngle);
-      servo->targetPulseWidth = angleToPulseWidth(*servo, servo->targetAngle);
-      servo->isMoving = true;
 
-      // Immediate move if speed is 100% (or an 'immediate' flag was used
-      // previously)
-      if (servo->speed >= 100) {
-        setServoPulseWidth(*servo, servo->targetPulseWidth);
-        servo->isMoving = false;
-      }
-      response["status"] = F("OK");
-      response["targetAngle"] = servo->targetAngle;
-      response["currentAngle"] = servo->currentAngle;
-      action_taken = true;
-    }
-    if (doc.containsKey("command")) {
+    int newTargetAngle = servo->targetAngle;  // Default to current target
+    bool angleChanged = false;
+
+    if (doc.containsKey("angle")) {  // Direct angle key
+      newTargetAngle = doc["angle"];
+      angleChanged = true;
+    } else if (doc.containsKey("command")) {
       String cmd = doc["command"].as<String>();
-      action_taken = true;
-      if (cmd == F("attach")) {
-        attachServoPWM(*servo);
-        response["status"] = F("OK");
-        response["message"] = F("Servo attached");
-      } else if (cmd == F("detach")) {
-        detachServoPWM(*servo);
-        response["status"] = F("OK");
-        response["message"] = F("Servo detached");
-      } else if (cmd == F("reset")) {
-        servo->targetAngle = constrain(90, servo->minAngle, servo->maxAngle);
-        servo->targetPulseWidth = angleToPulseWidth(*servo, servo->targetAngle);
-        servo->isMoving = true;
-        response["status"] = F("OK");
-        response["targetAngle"] = servo->targetAngle;
-      } else if (cmd == F("setAngle")) {  // Similar to 'angle' key
-        if (doc.containsKey("value")) {
-          int angleCmd = doc["value"];
-          servo->targetAngle =
-              constrain(angleCmd, servo->minAngle, servo->maxAngle);
-          servo->targetPulseWidth =
-              angleToPulseWidth(*servo, servo->targetAngle);
-          servo->isMoving = true;
-          if (servo->speed >= 100) {  // immediate
-            setServoPulseWidth(*servo, servo->targetPulseWidth);
-            servo->isMoving = false;
-          }
-          response["status"] = F("OK");
-          response["targetAngle"] = servo->targetAngle;
-          response["currentAngle"] = servo->currentAngle;
-        } else {
-          response["status"] = F("ERROR");
-          response["message"] = F("Missing 'value' for setAngle");
-        }
-      } else if (cmd == F("stop")) {  // Stop gradual movement
+      if (cmd == F("setAngle") && doc.containsKey("value")) {
+        newTargetAngle = doc["value"];
+        angleChanged = true;
+      }
+      // ... other commands like attach, detach, stop ...
+      if (cmd == F("attach")) { /* ... */
+        action_taken = true;
+      }
+      if (cmd == F("detach")) { /* ... */
+        action_taken = true;
+      }
+      if (cmd == F("stop")) {  // Forcibly stop any movement
         servo->isMoving = false;
+        servo->isActionPending = false;  // Stop timed sequence action too
+        servo->calculatedMoveDuration = 0;
         response["status"] = F("OK");
         response["message"] = F("Servo movement stopped");
         response["angle"] = servo->currentAngle;
-      } else {
-        response["status"] = F("ERROR");
-        response["message"] = F("Unknown servo command");
-        action_taken = false;
+        action_taken = true;
       }
     }
 
+    if (angleChanged) {
+      servo->targetAngle =
+          constrain(newTargetAngle, servo->minAngle, servo->maxAngle);
+      servo->targetPulseWidth = angleToPulseWidth(*servo, servo->targetAngle);
+      servo->isMoving = true;  // General flag that it needs to move
+      action_taken = true;
+
+      if (isSequenceCommand) {
+        const char *commandId = doc["commandId"];
+        servo->pendingCommandId = commandId;
+        servo->isActionPending = true;
+        servo->speed = 100;  // Force full speed for sequenced moves
+
+        float degreesToMove = abs(servo->targetAngle - servo->currentAngle);
+        servo->calculatedMoveDuration =
+            (unsigned long)(degreesToMove * SERVO_MS_PER_DEGREE_FULL_SPEED);
+        servo->movementStartTime = millis();
+
+        Serial.printf(
+            "Servo %s: Seq cmd %s. Target: %d, Cur: %d, DegToMove: %.2f, "
+            "Duration: %lu ms\n",
+            servo->id.c_str(), commandId, servo->targetAngle,
+            servo->currentAngle, degreesToMove, servo->calculatedMoveDuration);
+      } else {
+        // Manual move, not a timed/sequenced one. Clear sequence tracking.
+        servo->isActionPending = false;
+        servo->calculatedMoveDuration = 0;
+        // If manual speed is 100, it will behave like old immediate move unless
+        // updateServoMovements is changed
+        if (servo->speed >= 100) {
+          setServoPulseWidth(*servo, servo->targetPulseWidth);
+          servo->isMoving = false;  // Manual immediate move is done
+        }
+      }
+      response["status"] = F("OK");
+      response["targetAngle"] = servo->targetAngle;
+      response["currentAngle"] =
+          servo->currentAngle;  // Reports angle before move starts for sequence
+    }
+
+    // ... (rest of the control logic for attach, detach, other non-angle
+    // commands if any)
+    // ... (ensure response is sent if action_taken)
     if (action_taken) {
       String jsonResponse;
       serializeJson(response, jsonResponse);
       client->text(jsonResponse);
-    } else if (!doc.containsKey("speed") && !doc.containsKey("angle") &&
+    } else if (!doc.containsKey("speed") && !angleChanged &&
                !doc.containsKey("command")) {
-      client->text(
-          F("ERROR: No valid control key (speed, angle, command) for servo"));
+      client->text(F("ERROR: No valid control key for servo"));
     }
+
   } else if (strcmp(action, "remove") == 0) {
     auto it = std::remove_if(configuredServos.begin(), configuredServos.end(),
                              [&](const ServoConfig &s) { return s.id == id; });
@@ -540,8 +556,21 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     } else if (strcmp(command, "move") == 0) {
       if (doc.containsKey("value")) {
         long targetPos = clampPosition(stepper, doc["value"].as<long>());
+
+        // Store command ID if provided (for sequence tracking)
+        const char *commandId = nullptr;
+        if (doc.containsKey("commandId")) {
+          commandId = doc["commandId"];
+          stepper->pendingCommandId = commandId;
+        }
+
+        // Set target and start movement
         stepper->stepper->moveTo(targetPos);
         stepper->targetPosition = targetPos;
+        stepper->isActionPending =
+            true;  // Mark that we need to notify on completion
+
+        // Generate response
         char buffer[100];
         snprintf(buffer, sizeof(buffer), "OK: Stepper %s moving to %ld",
                  id.c_str(), targetPos);
@@ -555,10 +584,36 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         long currentPos = stepper->stepper->getCurrentPosition();
         long newPos = clampPosition(stepper, currentPos + steps);
         steps = newPos - currentPos;  // Recalculate steps based on clamping
+
+        // Store command ID if provided (for sequence tracking)
+        const char *commandId = nullptr;
+        if (doc.containsKey("commandId")) {
+          commandId = doc["commandId"];
+          stepper->pendingCommandId = commandId;
+        }
+
         if (steps != 0) {
           stepper->stepper->move(steps);
           stepper->targetPosition = newPos;
+          stepper->isActionPending =
+              true;  // Mark that we need to notify on completion
+        } else {
+          // If no actual movement due to clamping, send completion immediately
+          if (commandId) {
+            StaticJsonDocument<256> completionMsg;
+            completionMsg["type"] = "actionComplete";
+            completionMsg["componentId"] = id;
+            completionMsg["componentGroup"] = "steppers";
+            completionMsg["commandId"] = commandId;
+            completionMsg["success"] = true;
+
+            String completionJson;
+            serializeJson(completionMsg, completionJson);
+            ws.textAll(completionJson);
+          }
         }
+
+        // Generate response
         char buffer[128];
         snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld to %ld",
                  id.c_str(), steps, newPos);

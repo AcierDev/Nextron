@@ -6,6 +6,7 @@ import { createWindow } from "./helpers";
 import { setupIpHandlers } from "./handlers/ip-handler";
 import { setupConfigHandlers } from "./handlers/config-handlers";
 import { setupConnectionHandlers } from "./handlers/connection-handler";
+import { setupSequenceHandlers } from "./handlers/sequence-handler";
 import { spawn, execSync, ChildProcess } from "child_process";
 import fs from "fs";
 import { SerialPort } from "serialport";
@@ -272,6 +273,7 @@ function getPioPath(): string {
   setupIpHandlers();
   setupConfigHandlers();
   setupConnectionHandlers();
+  setupSequenceHandlers();
 
   const mainWindow = createWindow("main", {
     width: 1000,

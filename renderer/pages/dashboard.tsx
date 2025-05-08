@@ -18,6 +18,7 @@ import {
   HardwareConfig,
   ConfiguredComponent,
   FullConfigDataIPC,
+  SavedConfigDocument,
 } from "../../common/types";
 
 // Define IPC handler interface
@@ -169,73 +170,96 @@ export default function Dashboard() {
     (hwConfig: HardwareConfig): MotorDisplay[] => {
       const displayMotors: MotorDisplay[] = [];
 
-      hwConfig.servos.forEach((servo) => {
-        const servoConfig = servo as any; // Type assertion for new fields
-        displayMotors.push({
-          id: servo.id,
-          type: "servo",
-          name: servo.name,
-          angle: 90, // Default or last known state
-          minAngle: servo.minAngle ?? 0,
-          maxAngle: servo.maxAngle ?? 180,
-          pins: { control: servo.pins[0] },
-          initialPresets: servoConfig.presets ?? [0, 45, 90, 135, 180],
-          initialSpeed: servoConfig.speed ?? 100,
+      // Check if servos array exists and is an array
+      if (hwConfig && Array.isArray(hwConfig.servos)) {
+        hwConfig.servos.forEach((servo) => {
+          const servoConfig = servo as any; // Type assertion for new fields
+          displayMotors.push({
+            id: servo.id,
+            type: "servo",
+            name: servo.name,
+            angle: 90, // Default or last known state
+            minAngle: servo.minAngle ?? 0,
+            maxAngle: servo.maxAngle ?? 180,
+            pins: { control: servo.pins[0] },
+            initialPresets: servoConfig.presets ?? [0, 45, 90, 135, 180],
+            initialSpeed: servoConfig.speed ?? 100,
+          });
         });
-      });
+      } else {
+        console.warn(
+          "[Dashboard] hwConfig.servos is missing or not an array",
+          hwConfig
+        );
+      }
 
-      hwConfig.steppers.forEach((stepper) => {
-        const stepperConfig = stepper as any; // Type assertion
-        displayMotors.push({
-          id: stepper.id,
-          type: "stepper",
-          name: stepper.name,
-          position: 0, // Default or last known state
-          speed: stepperConfig.maxSpeed ?? 1000, // Map maxSpeed from config to speed prop for card
-          acceleration: stepperConfig.acceleration ?? 500, // Map acceleration from config to accel prop for card
-          stepsPerInch: stepperConfig.stepsPerInch ?? 2000,
-          minPosition: stepperConfig.minPosition ?? -50000,
-          maxPosition: stepperConfig.maxPosition ?? 50000,
-          pins: {
-            step: stepper.pins[0],
-            direction: stepper.pins[1],
-            enable: stepper.pins[2],
-          },
-          initialJogUnit: stepperConfig.jogUnit ?? "steps",
-          initialJogAmount: stepperConfig.jogAmount ?? 200,
-          initialJogAmountInches: stepperConfig.jogAmountInches ?? 0.1,
+      // Check if steppers array exists and is an array
+      if (hwConfig && Array.isArray(hwConfig.steppers)) {
+        hwConfig.steppers.forEach((stepper) => {
+          const stepperConfig = stepper as any; // Type assertion
+          displayMotors.push({
+            id: stepper.id,
+            type: "stepper",
+            name: stepper.name,
+            position: 0, // Default or last known state
+            speed: stepperConfig.maxSpeed ?? 1000, // Map maxSpeed from config to speed prop for card
+            acceleration: stepperConfig.acceleration ?? 500, // Map acceleration from config to accel prop for card
+            stepsPerInch: stepperConfig.stepsPerInch ?? 2000,
+            minPosition: stepperConfig.minPosition ?? -50000,
+            maxPosition: stepperConfig.maxPosition ?? 50000,
+            pins: {
+              step: stepper.pins[0],
+              direction: stepper.pins[1],
+              enable: stepper.pins[2],
+            },
+            initialJogUnit: stepperConfig.jogUnit ?? "steps",
+            initialJogAmount: stepperConfig.jogAmount ?? 200,
+            initialJogAmountInches: stepperConfig.jogAmountInches ?? 0.1,
+          });
         });
-      });
+      } else {
+        console.warn(
+          "[Dashboard] hwConfig.steppers is missing or not an array",
+          hwConfig
+        );
+      }
 
-      // Transform pins array to IOPinDisplay objects
-      hwConfig.pins.forEach((pin) => {
-        // Extract pin properties from the component
-        const mode = pin.type.includes("input") ? "input" : "output";
-        let pinType: "digital" | "analog" | "pwm" = "digital";
+      // Check if pins array exists and is an array
+      if (hwConfig && Array.isArray(hwConfig.pins)) {
+        hwConfig.pins.forEach((pin) => {
+          // Extract pin properties from the component
+          const mode = pin.type.includes("input") ? "input" : "output";
+          let pinType: "digital" | "analog" | "pwm" = "digital";
 
-        if (pin.type.includes("analog")) {
-          pinType = "analog";
-        } else if (pin.type.includes("pwm")) {
-          pinType = "pwm";
-        }
+          if (pin.type.includes("analog")) {
+            pinType = "analog";
+          } else if (pin.type.includes("pwm")) {
+            pinType = "pwm";
+          }
 
-        displayMotors.push({
-          id: pin.id,
-          type: "digital",
-          name: pin.name,
-          pinNumber: pin.pins[0],
-          mode: mode,
-          pinType: pinType,
-          value:
-            mode === "input"
-              ? 0
-              : pinType === "digital"
-              ? 0
-              : pinType === "analog"
-              ? 512
-              : 128,
+          displayMotors.push({
+            id: pin.id,
+            type: "digital", // This should likely be pinType, or the MotorDisplay type needs adjustment
+            name: pin.name,
+            pinNumber: pin.pins[0],
+            mode: mode,
+            pinType: pinType,
+            value:
+              mode === "input"
+                ? 0
+                : pinType === "digital"
+                ? 0
+                : pinType === "analog"
+                ? 512
+                : 128,
+          });
         });
-      });
+      } else {
+        console.warn(
+          "[Dashboard] hwConfig.pins is missing or not an array",
+          hwConfig
+        );
+      }
 
       return displayMotors;
     },
@@ -292,10 +316,34 @@ export default function Dashboard() {
           description: data.description || "",
         });
 
-        const loadedHardware = data.hardware || initialHardwareConfig;
-        setHardwareConfig(loadedHardware);
+        // Normalize hardware configuration to ensure all array properties are present
+        const hardwareFromData = data.hardware;
+        const normalizedHardware: HardwareConfig = {
+          servos:
+            hardwareFromData?.servos && Array.isArray(hardwareFromData.servos)
+              ? hardwareFromData.servos
+              : [],
+          steppers:
+            hardwareFromData?.steppers &&
+            Array.isArray(hardwareFromData.steppers)
+              ? hardwareFromData.steppers
+              : [],
+          pins:
+            hardwareFromData?.pins && Array.isArray(hardwareFromData.pins)
+              ? hardwareFromData.pins
+              : [],
+          sensors:
+            hardwareFromData?.sensors && Array.isArray(hardwareFromData.sensors)
+              ? hardwareFromData.sensors
+              : [],
+          relays:
+            hardwareFromData?.relays && Array.isArray(hardwareFromData.relays)
+              ? hardwareFromData.relays
+              : [],
+        };
 
-        setMotors(transformHardwareToDisplay(loadedHardware));
+        setHardwareConfig(normalizedHardware);
+        setMotors(transformHardwareToDisplay(normalizedHardware));
         setIsConfigLoaded(true);
       } catch (error) {
         console.error("[Dashboard] Error loading configuration:", error);
@@ -956,12 +1004,22 @@ export default function Dashboard() {
     setInfoMessage("Saving configuration...");
     try {
       console.log(`[Dashboard] Saving config ${currentConfig.id} via IPC...`);
-      const updatedConfig = await window.ipc.invoke(
+
+      // Prepare the payload to be sent. Only include fields that are managed by this dashboard page.
+      // For now, it's primarily the hardware configuration.
+      // If name/description were editable on this page, they would be included here too.
+      const payloadToSave: Partial<SavedConfigDocument> = {
+        hardware: hardwareConfig,
+        // If description were editable on this page, you might add:
+        // description: currentConfig.description,
+      };
+
+      const updatedConfigData = await window.ipc.invoke(
         "update-config",
         currentConfig.id,
-        hardwareConfig
+        payloadToSave // Send the correctly structured payload
       );
-      console.log("Save successful:", updatedConfig);
+      console.log("Save successful:", updatedConfigData);
       setInfoMessage(
         `Configuration '${currentConfig.name}' saved successfully!`
       );
@@ -1483,10 +1541,43 @@ export default function Dashboard() {
             configPayload.pinType = componentData.pins.type;
           }
 
-          setHardwareConfig((prev) => ({
-            ...prev,
-            [componentGroup]: [...prev[componentGroup], newComponent],
-          }));
+          setHardwareConfig((prev) => {
+            const updatedHardwareConfig = { ...prev };
+
+            // Based on the type of componentGroup, newComponent should be cast to the appropriate specific type.
+            // This assumes ServoConfig, StepperConfig, PinConfig are the element types in HardwareConfig arrays
+            // and are members of the ConfiguredComponent union.
+            switch (componentGroup) {
+              case "servos":
+                updatedHardwareConfig.servos = [
+                  ...prev.servos,
+                  newComponent as (typeof prev.servos)[number], // Or specific type like ServoConfig
+                ];
+                break;
+              case "steppers":
+                updatedHardwareConfig.steppers = [
+                  ...prev.steppers,
+                  newComponent as (typeof prev.steppers)[number], // Or specific type like StepperConfig
+                ];
+                break;
+              case "pins":
+                updatedHardwareConfig.pins = [
+                  ...prev.pins,
+                  newComponent as (typeof prev.pins)[number], // Or specific type like PinConfig
+                ];
+                break;
+              // Add cases for 'sensors' and 'relays' if they can be added via this dialog
+              default:
+                // Log an error or handle unexpected componentGroup. This path should ideally not be hit.
+                console.error(
+                  `[Dashboard] Unhandled componentGroup during component creation: ${
+                    componentGroup as string
+                  }`
+                );
+                return prev; // Return previous state if group is unknown
+            }
+            return updatedHardwareConfig;
+          });
 
           sendMessage({
             action: "configure",

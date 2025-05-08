@@ -1,0 +1,79 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Microcontroller Component Model
+
+## Component Data Structures
+
+The ESP32 firmware uses a configuration-based component model defined in [config.h](mdc:firmware/microcontroller/src/config.h). The system manages three main types of components:
+
+### IO Pins
+```cpp
+struct IoPinConfig {
+  String id;               // Unique identifier
+  String name;             // Display name
+  uint8_t pin;             // GPIO pin number
+  String pinType;          // "digital", "analog", or "pwm"
+  String mode;             // "input" or "output"
+  int lastValue;           // Last read or written value
+  PinPullMode pullMode;    // PULL_NONE, PULL_UP, PULL_DOWN
+  uint16_t debounceMs;     // Debounce time for inputs
+  Bounce* debouncer;       // Debouncer instance
+};
+```
+
+### Servo Motors
+```cpp
+struct ServoConfig {
+  String id;               // Unique identifier
+  String name;             // Display name
+  uint8_t pin;             // GPIO pin number
+  int channel;             // LEDC channel
+  bool isAttached;         // Whether servo is active
+  int minAngle;            // Minimum angle (degrees)
+  int maxAngle;            // Maximum angle (degrees)
+  int minPulseWidth;       // Min pulse width (μs)
+  int maxPulseWidth;       // Max pulse width (μs)
+  int speed;               // Movement speed (1-100)
+  int currentAngle;        // Current position
+  int targetAngle;         // Target position
+  // Additional fields for motion control
+};
+```
+
+### Stepper Motors
+```cpp
+struct StepperConfig {
+  String id;               // Unique identifier
+  String name;             // Display name
+  uint8_t pulPin;          // Pulse pin
+  uint8_t dirPin;          // Direction pin
+  uint8_t enaPin;          // Enable pin
+  FastAccelStepper* stepper; // Stepper driver instance
+  float maxSpeed;          // Steps per second
+  float acceleration;      // Steps/sec^2
+  long minPosition;        // Minimum position
+  long maxPosition;        // Maximum position
+  long currentPosition;    // Current position
+  long targetPosition;     // Target position
+  float stepsPerInch;      // Calibration value
+  bool isHomed;            // Homing status
+  // Additional fields for command tracking
+};
+```
+
+## Component Management
+
+Components are stored in global vectors:
+- `configuredPins`: List of IO pin configurations
+- `configuredServos`: List of servo configurations
+- `configuredSteppers`: List of stepper configurations
+
+Helper functions provide lookup by ID:
+- `findPinById()`: Find a pin by its ID
+- `findServoById()`: Find a servo by its ID
+- `findStepperById()`: Find a stepper by its ID
+
+Components are dynamically created and configured through WebSocket messages as defined in [message_handler.cpp](mdc:firmware/microcontroller/src/message_handler.cpp).

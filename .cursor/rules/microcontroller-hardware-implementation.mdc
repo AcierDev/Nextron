@@ -1,0 +1,77 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Microcontroller Hardware Implementation
+
+## Hardware Driver Implementation
+
+### IO Pin Implementation
+[io_pin.cpp](mdc:firmware/microcontroller/src/hardware/io_pin.cpp) implements:
+
+- **Pin Setup**
+  - Configuration of pin mode (input/output)
+  - Support for digital and analog pins
+  - Configuration of pull-up/pull-down resistors
+  - Input debouncing using the Bounce2 library
+
+- **Pin Operations**
+  - Digital read/write
+  - Analog read (ADC)
+  - PWM output using ESP32's LEDC peripheral
+  - Periodic scanning of input pins
+
+### Servo Implementation
+[servo.cpp](mdc:firmware/microcontroller/src/hardware/servo.cpp) implements:
+
+- **ESP32-Specific PWM Control**
+  - Uses ESP32's LEDC peripheral for precise PWM generation
+  - Configurable frequency and resolution
+  - Dynamic channel allocation
+
+- **Smooth Motion Control**
+  - Gradual movement from current to target position
+  - Speed control using time-based interpolation
+  - Non-blocking design that updates in the main loop
+
+- **Angle Mapping**
+  - Conversion between angles and pulse widths
+  - Configurable angle ranges and pulse widths
+
+### Stepper Implementation
+[stepper.cpp](mdc:firmware/microcontroller/src/hardware/stepper.cpp) implements:
+
+- **FastAccelStepper Integration**
+  - Hardware timer-based pulse generation
+  - Precise acceleration and deceleration profiles
+  - Position tracking and limits
+
+- **Motion Profiles**
+  - Absolute and relative positioning
+  - Speed and acceleration control
+  - Emergency stop functionality
+
+- **Position Management**
+  - Position reporting at configured intervals
+  - Position limits and clamping
+  - Homing sequence support
+
+## ESP32-Specific Features
+
+The firmware leverages several ESP32-specific capabilities:
+
+1. **Multi-core Operation**
+   - Core 0: WiFi and system tasks
+   - Core 1: Main application logic
+
+2. **Hardware Peripherals**
+   - LEDC: Hardware PWM for servos
+   - I2S: For stepper pulse generation (via FastAccelStepper)
+   - ADC: For analog input reading
+   - GPIO matrix: For flexible pin assignments
+
+3. **Memory Management**
+   - Dynamic component allocation
+   - String handling with Arduino String class
+   - JSON processing with ArduinoJson library

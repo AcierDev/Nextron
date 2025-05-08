@@ -1,0 +1,26 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Microcontroller Structure
+
+## Directory Structure
+
+The [firmware/microcontroller](mdc:firmware/microcontroller) directory contains the ESP32 firmware for the Everwood CNC hardware:
+
+- **src/**: Main source code files
+  - [src/main.cpp](mdc:firmware/microcontroller/src/main.cpp): Entry point with setup() and loop() functions
+  - [src/config.cpp](mdc:firmware/microcontroller/src/config.cpp) & [src/config.h](mdc:firmware/microcontroller/src/config.h): Configuration definitions and storage
+  - [src/message_handler.cpp](mdc:firmware/microcontroller/src/message_handler.cpp) & [src/message_handler.h](mdc:firmware/microcontroller/src/message_handler.h): WebSocket communication and message processing
+
+- **src/hardware/**: Hardware control modules
+  - [src/hardware/stepper.cpp](mdc:firmware/microcontroller/src/hardware/stepper.cpp) & [src/hardware/stepper.h](mdc:firmware/microcontroller/src/hardware/stepper.h): Stepper motor control
+  - [src/hardware/servo.cpp](mdc:firmware/microcontroller/src/hardware/servo.cpp) & [src/hardware/servo.h](mdc:firmware/microcontroller/src/hardware/servo.h): Servo motor control
+  - [src/hardware/io_pin.cpp](mdc:firmware/microcontroller/src/hardware/io_pin.cpp) & [src/hardware/io_pin.h](mdc:firmware/microcontroller/src/hardware/io_pin.h): GPIO pin management
+
+- **src/network/**: Network connectivity
+  - [src/network/wifi_manager.cpp](mdc:firmware/microcontroller/src/network/wifi_manager.cpp) & [src/network/wifi_manager.h](mdc:firmware/microcontroller/src/network/wifi_manager.h): WiFi connection management
+
+## Build Tools
+The microcontroller code uses PlatformIO for building and deploying firmware to ESP32 devices.

@@ -42,7 +42,8 @@ struct ServoConfig {
   int maxPulseWidth = 2400;  // Pulse width in microseconds for 180 degrees
 
   // Speed control variables
-  int speed = 100;        // Default speed (1-100)
+  int speed =
+      100;  // Default speed (1-100) for manual control & base for sequence
   int currentAngle = 90;  // Current angle position (degrees)
   int targetAngle = 90;   // Target angle to move to (degrees)
 
@@ -51,25 +52,37 @@ struct ServoConfig {
       -1;  // Current pulse width in microseconds, -1 means not set
   int targetPulseWidth = -1;       // Target pulse width in microseconds
   unsigned long lastMoveTime = 0;  // Last time the pulse width was updated
-  bool isMoving = false;           // Whether the servo is currently in motion
+  bool isMoving = false;  // Whether the servo is currently in motion (generic)
+
+  // Action completion tracking for sequence execution
+  bool isActionPending = false;  // Whether a sequence action is in progress
+  String pendingCommandId = "";  // ID of the pending sequence command (if any)
+  unsigned long movementStartTime = 0;  // Timestamp when a sequenced move began
+  unsigned long calculatedMoveDuration =
+      0;  // Expected duration for the current sequenced move (ms)
 };
 
 // --- Stepper Configuration ---
 struct StepperConfig {
   String id;
   String name;
-  uint8_t pulPin;
-  uint8_t dirPin;
-  uint8_t enaPin = 0;  // Optional enable pin, 0 if not used
+  uint8_t pulPin = 0;
+  uint8_t dirPin = 0;
+  uint8_t enaPin = 0;
   FastAccelStepper* stepper = nullptr;
+  float maxSpeed = 1000.0;  // Steps per second
+  float acceleration = 500.0;
+  long minPosition = -50000;
+  long maxPosition = 50000;
   long currentPosition = 0;
   long targetPosition = 0;
-  float maxSpeed = 100000.0;     // Increased default max speed
-  float acceleration = 50000.0;  // Increased default acceleration
-  long minPosition = -50000;     // Min position limit
-  long maxPosition = 50000;      // Max position limit
-  float stepsPerInch = 200.0;    // For unit conversion
+  float stepsPerInch = 200.0;  // Default: 200 steps = 1 inch
+  bool isHomed = false;
   unsigned long lastPositionReportTime = 0;
+
+  // Action completion tracking
+  bool isActionPending = false;  // Whether an action is in progress
+  String pendingCommandId = "";  // ID of the pending command (if any)
 };
 
 // --- Global Configuration Constants ---
@@ -80,6 +93,9 @@ extern const unsigned long
     stepperPositionReportInterval;  // Report position every 100ms if changed
 extern const unsigned long ipPrintDuration;
 extern const unsigned long ipPrintInterval;
+// Servo speed: 0.23 seconds per 60 degrees
+// (0.4666 * 1000 ms) / 60 degrees = 7.7777... ms per degree
+const float SERVO_MS_PER_DEGREE_FULL_SPEED = 7.7777f;
 
 // --- Global Data Structures ---
 extern std::vector<IoPinConfig> configuredPins;

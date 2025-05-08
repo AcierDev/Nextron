@@ -1,125 +1,210 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Device, SequenceStep } from "./sequence-page";
+import {
+  DeviceDisplay,
+  ActionStep,
+  DelayStep,
+  HardwareConfig, // Needed for deviceComponentGroup
+} from "../../../common/types"; // Use types from common
+
+// Removed local type imports from sequence-page
+
+// Define SendMessage type locally if not global
+type SendMessage = (message: object) => void; // Keep for direct device control if used
 
 interface SequenceDevicePanelProps {
-  devices: Device[];
-  isRecording: boolean;
-  onRecordStep: (
-    deviceId: string,
-    action: string,
-    value: number,
-    duration?: number
+  devices: DeviceDisplay[];
+  isRecording: boolean; // Keep for UI cues if needed, though direct recording is replaced
+  // onRecordStep is replaced by onAddStep
+  onAddStep: (
+    stepData: Omit<ActionStep, "id" | "type"> | Omit<DelayStep, "id" | "type">
   ) => void;
-  currentStep: SequenceStep | null;
-  isPlaying: boolean;
+  // currentStep: SequenceStep | null; // Removed for now, simplify focus to adding steps
+  isPlaying?: boolean; // Optional: Keep if it disables controls
+  sendMessage?: SendMessage; // Optional: Keep for direct device control
 }
 
 export function SequenceDevicePanel({
   devices,
   isRecording,
-  onRecordStep,
-  currentStep,
+  onAddStep,
   isPlaying,
+  sendMessage,
 }: SequenceDevicePanelProps) {
   const [activeTab, setActiveTab] = useState("all");
-  const [deviceStates, setDeviceStates] = useState<Record<string, any>>({});
+  // deviceStates now uses ConfiguredComponent properties directly if available through DeviceDisplay
+  const [deviceStates, setDeviceStates] = useState<
+    Record<
+      string,
+      Partial<
+        DeviceDisplay & { position?: number; angle?: number; value?: any }
+      >
+    >
+  >({});
 
-  // Filter devices based on active tab
+  useEffect(() => {
+    // Initialize deviceStates from passed devices if needed, or ensure defaults are handled in getDeviceState
+    const initialStates = {};
+    devices.forEach((device) => {
+      initialStates[device.id] = {
+        position: (device as any).position || 0, // Assuming steppers might have this
+        angle: (device as any).angle || 0, // Assuming servos might have this
+        value: (device as any).value || 0, // Assuming IO pins might have this
+      };
+    });
+    setDeviceStates(initialStates);
+  }, [devices]);
+
   const filteredDevices =
     activeTab === "all"
       ? devices
-      : devices.filter((device) => device.type === activeTab);
+      : devices.filter(
+          (device) =>
+            device.componentGroup === activeTab ||
+            (activeTab === "io" && device.componentGroup === "pins")
+        ); // Adjust for 'pins' being IO
 
-  // Handle device value change
   const handleDeviceChange = (
     deviceId: string,
     action: string,
-    value: number,
-    duration = 0
+    value: any,
+    speed?: number,
+    acceleration?: number
   ) => {
-    // Update local state
-    setDeviceStates((prev) => ({
-      ...prev,
-      [deviceId]: {
-        ...prev[deviceId],
-        [action.replace("set", "").toLowerCase()]: value,
-      },
-    }));
+    const device = devices.find((d) => d.id === deviceId);
+    if (!device) return;
 
-    // Record step if recording
-    if (isRecording) {
-      onRecordStep(deviceId, action, value, duration);
-    }
-  };
+    // Update local UI state for immediate feedback
+    let propertyToUpdateLocally: keyof (DeviceDisplay & {
+      position?: number;
+      angle?: number;
+      value?: any;
+    }) = "name"; // Default, will be overwritten
+    if (action === "moveTo" || action === "step")
+      propertyToUpdateLocally = "position";
+    else if (action === "setAngle") propertyToUpdateLocally = "angle";
+    else if (action === "setValue") propertyToUpdateLocally = "value";
 
-  // Get device state
-  const getDeviceState = (
-    deviceId: string,
-    property: string,
-    defaultValue: any
-  ) => {
-    return deviceStates[deviceId]?.[property] !== undefined
-      ? deviceStates[deviceId][property]
-      : defaultValue;
-  };
-
-  // Apply current step during playback
-  if (isPlaying && currentStep) {
-    const { deviceId, action, value } = currentStep;
-    const property = action.replace("set", "").toLowerCase();
-
-    // Update device state if it's different
-    if (getDeviceState(deviceId, property, null) !== value) {
+    if (propertyToUpdateLocally !== "name") {
+      // Ensure it was a recognized action for local state
       setDeviceStates((prev) => ({
         ...prev,
         [deviceId]: {
           ...prev[deviceId],
-          [property]: value,
+          [propertyToUpdateLocally]: value,
         },
       }));
     }
-  }
+
+    // If isRecording is true (or some other condition indicates adding a step via UI interaction):
+    // We will call onAddStep. The original `isRecording` flag might be repurposed or a new mechanism used.
+    // For now, let's assume any control interaction that *could* be a step calls onAddStep.
+    const stepData: Omit<ActionStep, "id" | "type"> = {
+      deviceId: device.id,
+      deviceComponentGroup: device.componentGroup as keyof HardwareConfig, // Cast as it comes from DeviceDisplay
+      action: action,
+      value: value,
+      ...(speed !== undefined && { speed }),
+      ...(acceleration !== undefined && { acceleration }),
+    };
+    onAddStep(stepData); // Call this to add the step to the store
+
+    // Send message for direct device control (if sendMessage is provided)
+    if (sendMessage) {
+      let messagePayload: any = {
+        action: "control",
+        componentGroup:
+          device.componentGroup +
+          (device.componentGroup.endsWith("s") ? "" : "s"), // ensure plural like servos, steppers
+        id: deviceId,
+        command: action,
+        value: value,
+      };
+      if (speed !== undefined) messagePayload.speed = speed;
+      if (acceleration !== undefined)
+        messagePayload.acceleration = acceleration;
+      sendMessage(messagePayload);
+    }
+  };
+
+  const getDeviceState = (
+    deviceId: string,
+    property: keyof (DeviceDisplay & {
+      position?: number;
+      angle?: number;
+      value?: any;
+    }),
+    defaultValue: any
+  ) => {
+    // Try to get from local state, then from device prop, then default
+    const localStateValue = deviceStates[deviceId]?.[property];
+    if (localStateValue !== undefined) return localStateValue;
+
+    const device = devices.find((d) => d.id === deviceId);
+    // Access known common properties from DeviceDisplay or potential extensions like position/angle
+    if (device && property in device) {
+      return (device as any)[property];
+    }
+    // Fallback for specific conventional properties if not directly on DeviceDisplay
+    if (device && property === "position")
+      return (device as any).position || defaultValue;
+    if (device && property === "angle")
+      return (device as any).angle || defaultValue;
+    if (device && property === "value")
+      return (device as any).value || defaultValue;
+
+    return defaultValue;
+  };
+
+  // Playback logic that updated local state is removed for now to simplify.
+  // If isPlaying is true, controls in DeviceControl might be disabled.
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 p-4 bg-card rounded-lg border">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid grid-cols-4">
-          <TabsTrigger value="all" className="text-xs">
-            All
-          </TabsTrigger>
-          <TabsTrigger value="stepper" className="text-xs">
-            Steppers
-          </TabsTrigger>
-          <TabsTrigger value="servo" className="text-xs">
-            Servos
-          </TabsTrigger>
-          <TabsTrigger value="io" className="text-xs">
-            IO Pins
-          </TabsTrigger>
+        <TabsList className="grid grid-cols-4 w-full">
+          <TabsTrigger value="all">All</TabsTrigger>
+          <TabsTrigger value="steppers">Steppers</TabsTrigger>
+          <TabsTrigger value="servos">Servos</TabsTrigger>
+          <TabsTrigger value="pins">IO Pins</TabsTrigger>{" "}
+          {/* Changed to 'pins' to match HardwareConfig key if applicable */}
         </TabsList>
       </Tabs>
 
-      <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+      <div className="space-y-4 max-h-[calc(100vh-300px)] overflow-y-auto pr-2">
         {filteredDevices.length === 0 ? (
-          <div className="text-center py-4 text-gray-500 dark:text-gray-400">
-            <p>No devices found</p>
+          <div className="text-center py-4 text-muted-foreground">
+            <p>
+              No devices of type '{activeTab !== "all" ? activeTab : "any"}'
+              found.
+            </p>
+            {activeTab === "all" && devices.length === 0 && (
+              <p>No devices configured.</p>
+            )}
           </div>
         ) : (
           filteredDevices.map((device) => (
             <DeviceControl
               key={device.id}
-              device={device}
-              isRecording={isRecording}
-              isPlaying={isPlaying}
-              isActive={currentStep?.deviceId === device.id}
-              onChange={handleDeviceChange}
-              state={deviceStates[device.id] || {}}
+              device={device} // Now DeviceDisplay
+              // isRecording={isRecording} // Propagate if DeviceControl uses it for UI
+              isPlaying={isPlaying} // Propagate if DeviceControl uses it
+              // isActive={currentStep?.deviceId === device.id} // Removed, simplify
+              onChange={handleDeviceChange} // This now triggers onAddStep
+              // Pass specific state properties that the control expects, using getDeviceState
+              currentPosition={getDeviceState(
+                device.id,
+                "position",
+                (device as any).minPosition || 0
+              )}
+              currentAngle={getDeviceState(device.id, "angle", 0)}
+              currentValue={getDeviceState(device.id, "value", 0)} // For IO
+              // Pass other device properties if needed by DeviceControl for rendering (e.g., min/max for sliders)
             />
           ))
         )}
@@ -129,250 +214,207 @@ export function SequenceDevicePanel({
 }
 
 interface DeviceControlProps {
-  device: Device;
-  isRecording: boolean;
-  isPlaying: boolean;
-  isActive: boolean;
+  device: DeviceDisplay; // Changed to DeviceDisplay
+  // isRecording?: boolean;
+  isPlaying?: boolean;
+  // isActive?: boolean;
   onChange: (
     deviceId: string,
     action: string,
-    value: number,
-    duration?: number
+    value: any,
+    speed?: number,
+    acceleration?: number
   ) => void;
-  state: Record<string, any>;
+  // state: Record<string, any>; // Replaced by specific state props
+  currentPosition?: number;
+  currentAngle?: number;
+  currentValue?: any; // For IO pins, could be boolean or number
 }
 
 function DeviceControl({
   device,
-  isRecording,
   isPlaying,
-  isActive,
   onChange,
-  state,
+  currentPosition,
+  currentAngle,
+  currentValue,
 }: DeviceControlProps) {
-  // Render different controls based on device type
-  switch (device.type) {
-    case "stepper":
+  // Render different controls based on device type (device.componentGroup or device.originalType)
+  switch (
+    device.originalType // Using originalType for more specific control rendering
+  ) {
+    case "Stepper":
       return (
         <div
-          className={`p-3 rounded-lg backdrop-blur-sm bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 ${
-            isActive
-              ? "ring-2 ring-blue-500 dark:ring-blue-400 border-transparent"
-              : ""
+          className={`p-3 rounded-lg border bg-background shadow-sm ${
+            isPlaying ? "opacity-70" : ""
           }`}
         >
-          <h3 className="font-medium mb-2 flex items-center">
-            <span className="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
+          <h3 className="font-medium mb-2 text-sm text-foreground">
+            {/* Icon can be added based on device.componentGroup */}
             {device.name}
           </h3>
-
           <div className="space-y-3">
             <div className="space-y-1">
               <div className="flex justify-between text-xs">
-                <span className="text-gray-500 dark:text-gray-400">
-                  Position
-                </span>
-                <span className="font-medium">
-                  {state.position || device.position}
+                <span className="text-muted-foreground">Position</span>
+                <span className="font-medium text-foreground">
+                  {currentPosition ?? (device as any).minPosition ?? 0}
                 </span>
               </div>
               <Slider
-                value={[state.position || device.position]}
-                min={device.minPosition}
-                max={device.maxPosition}
-                step={100}
+                value={[currentPosition ?? (device as any).minPosition ?? 0]}
+                min={(device as any).minPosition ?? 0}
+                max={(device as any).maxPosition ?? 1000} // Ensure max is defined
+                step={(device as any).stepsPerUnit ?? 1} // Or a sensible default
                 onValueChange={(value) =>
-                  onChange(device.id, "moveTo", value[0], 2000)
+                  onChange(
+                    device.id,
+                    "moveTo",
+                    value[0],
+                    (device as any).maxSpeed,
+                    (device as any).acceleration
+                  )
                 }
                 disabled={isPlaying}
-                className="h-2"
+                className="h-2 data-[disabled]:opacity-50"
               />
             </div>
-
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => onChange(device.id, "moveTo", 0, 2000)}
+                onClick={() =>
+                  onChange(
+                    device.id,
+                    "moveTo",
+                    (device as any).minPosition || 0,
+                    (device as any).maxSpeed,
+                    (device as any).acceleration
+                  )
+                }
                 disabled={isPlaying}
-                className="text-xs h-8"
               >
-                Home
+                Go to Min
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  onChange(device.id, "moveTo", device.maxPosition / 2, 2000)
+                  onChange(
+                    device.id,
+                    "moveTo",
+                    (device as any).maxPosition || 0,
+                    (device as any).maxSpeed,
+                    (device as any).acceleration
+                  )
                 }
                 disabled={isPlaying}
-                className="text-xs h-8"
               >
-                Center
+                Go to Max
               </Button>
             </div>
           </div>
         </div>
       );
-
-    case "servo":
+    case "Servo":
       return (
         <div
-          className={`p-3 rounded-lg backdrop-blur-sm bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 ${
-            isActive
-              ? "ring-2 ring-purple-500 dark:ring-purple-400 border-transparent"
-              : ""
+          className={`p-3 rounded-lg border bg-background shadow-sm ${
+            isPlaying ? "opacity-70" : ""
           }`}
         >
-          <h3 className="font-medium mb-2 flex items-center">
-            <span className="w-2 h-2 bg-purple-500 rounded-full mr-2"></span>
+          <h3 className="font-medium mb-2 text-sm text-foreground">
             {device.name}
           </h3>
-
           <div className="space-y-3">
             <div className="space-y-1">
               <div className="flex justify-between text-xs">
-                <span className="text-gray-500 dark:text-gray-400">Angle</span>
-                <span className="font-medium">
-                  {state.angle || device.angle}°
+                <span className="text-muted-foreground">Angle</span>
+                <span className="font-medium text-foreground">
+                  {currentAngle ?? (device as any).minAngle ?? 0}
                 </span>
               </div>
               <Slider
-                value={[state.angle || device.angle]}
-                min={device.minAngle}
-                max={device.maxAngle}
+                value={[currentAngle ?? (device as any).minAngle ?? 0]}
+                min={(device as any).minAngle ?? 0}
+                max={(device as any).maxAngle ?? 180}
                 step={1}
                 onValueChange={(value) =>
-                  onChange(device.id, "setAngle", value[0], 1000)
+                  onChange(device.id, "setAngle", value[0])
                 }
                 disabled={isPlaying}
-                className="h-2"
+                className="h-2 data-[disabled]:opacity-50"
               />
             </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  onChange(device.id, "setAngle", device.minAngle, 1000)
-                }
-                disabled={isPlaying}
-                className="text-xs h-8"
-              >
-                Min
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onChange(device.id, "setAngle", 90, 1000)}
-                disabled={isPlaying}
-                className="text-xs h-8"
-              >
-                90°
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  onChange(device.id, "setAngle", device.maxAngle, 1000)
-                }
-                disabled={isPlaying}
-                className="text-xs h-8"
-              >
-                Max
-              </Button>
-            </div>
+            {/* Add buttons for preset angles if device.presets exists */}
+            {(device as any).presets &&
+              Array.isArray((device as any).presets) &&
+              (device as any).presets.length > 0 && (
+                <div className="grid grid-cols-3 gap-1 pt-1">
+                  {((device as any).presets as number[]).map((presetAngle) => (
+                    <Button
+                      key={presetAngle}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() =>
+                        onChange(device.id, "setAngle", presetAngle)
+                      }
+                      disabled={isPlaying}
+                    >
+                      {presetAngle}°
+                    </Button>
+                  ))}
+                </div>
+              )}
           </div>
         </div>
       );
-
-    case "io":
+    case "Digital Output": // Assuming originalType for IO pins is specific
+    case "Digital Input": // Could be an input as well, but not controllable
+    case "Relay": // Relays are often like Digital Outputs
+      const isOutput =
+        device.originalType === "Digital Output" ||
+        device.originalType === "Relay";
       return (
         <div
-          className={`p-3 rounded-lg backdrop-blur-sm bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 ${
-            isActive
-              ? "ring-2 ring-amber-500 dark:ring-amber-400 border-transparent"
-              : ""
+          className={`p-3 rounded-lg border bg-background shadow-sm ${
+            isPlaying && isOutput ? "opacity-70" : ""
           }`}
         >
-          <h3 className="font-medium mb-2 flex items-center">
-            <span className="w-2 h-2 bg-amber-500 rounded-full mr-2"></span>
-            {device.name}
-          </h3>
-
-          <div className="space-y-3">
-            {device.pinType === "digital" ? (
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  State
-                </span>
-                <Switch
-                  checked={state.value === 1 || device.value === 1}
-                  onCheckedChange={(checked) =>
-                    onChange(device.id, "setValue", checked ? 1 : 0, 0)
-                  }
-                  disabled={isPlaying || device.mode === "input"}
-                />
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500 dark:text-gray-400">
-                    Value
-                  </span>
-                  <span className="font-medium">
-                    {state.value || device.value}
-                  </span>
-                </div>
-                <Slider
-                  value={[state.value || device.value]}
-                  min={0}
-                  max={device.pinType === "analog" ? 1023 : 255}
-                  step={1}
-                  onValueChange={(value) =>
-                    onChange(device.id, "setValue", value[0], 0)
-                  }
-                  disabled={isPlaying || device.mode === "input"}
-                  className="h-2"
-                />
-              </div>
-            )}
-
-            {device.mode === "output" && device.pinType !== "digital" && (
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onChange(device.id, "setValue", 0, 0)}
-                  disabled={isPlaying}
-                  className="text-xs h-8"
-                >
-                  Min
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    onChange(
-                      device.id,
-                      "setValue",
-                      device.pinType === "analog" ? 1023 : 255,
-                      0
-                    )
-                  }
-                  disabled={isPlaying}
-                  className="text-xs h-8"
-                >
-                  Max
-                </Button>
-              </div>
+          <div className="flex items-center justify-between">
+            <h3 className="font-medium text-sm text-foreground">
+              {device.name}
+            </h3>
+            {isOutput && (
+              <Switch
+                checked={!!currentValue} // Ensure boolean
+                onCheckedChange={
+                  (checked) => onChange(device.id, "setValue", checked ? 1 : 0) // Send 1/0 or true/false based on backend
+                }
+                disabled={isPlaying}
+                aria-label={`Toggle ${device.name}`}
+              />
             )}
           </div>
+          {!isOutput && (
+            <p className="text-xs text-muted-foreground">
+              Current value:{" "}
+              {currentValue === undefined ? "N/A" : String(currentValue)}{" "}
+              (Input)
+            </p>
+          )}
         </div>
       );
-
     default:
-      return null;
+      return (
+        <div className="p-3 rounded-lg border bg-background shadow-sm">
+          <h3 className="font-medium text-sm text-foreground">{device.name}</h3>
+          <p className="text-xs text-muted-foreground">
+            ({device.originalType}) - No direct control UI implemented.
+          </p>
+        </div>
+      );
   }
 }
