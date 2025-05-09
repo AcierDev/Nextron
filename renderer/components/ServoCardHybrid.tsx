@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 // Define WebSocket message sending function type
-type SendMessage = (message: object) => void;
+type SendMessage = (message: object) => Promise<boolean>;
 
 interface ServoCardProps {
   id: string;
@@ -49,7 +49,7 @@ interface ServoCardProps {
   onDelete: () => void;
   onDuplicate: () => void;
   onEditPins: () => void;
-  sendMessage: SendMessage; // Added sendMessage prop
+  sendMessage: SendMessage;
   initialPresets?: number[];
   initialSpeed?: number; // Add initial speed
   onSettingsChange?: (
@@ -204,27 +204,22 @@ export default function ServoCardHybrid({
     ctx.fill();
   }, [angle, minAngle, maxAngle, presets]);
 
-  const moveToAngle = (newAngle: number) => {
-    // Apply limits locally for immediate UI feedback
+  const moveToAngle = async (newAngle: number) => {
     const limitedAngle = Math.min(Math.max(newAngle, minAngle), maxAngle);
-
     console.log(
       `[ServoCard ${id}] Sending setAngle: ${limitedAngle}, speed: ${speed}`
     );
-
-    // Check if the servo is attached and show error if not
     try {
-      sendMessage({
+      await sendMessage({
         action: "control",
         componentGroup: "servos",
         id: id,
-        command: "setAngle", // Using the command name we added to the firmware
+        command: "setAngle",
         value: limitedAngle,
       });
     } catch (error) {
       console.error(`[ServoCard ${id}] Error sending angle command:`, error);
     }
-    // Angle state will be updated from parent via the angle prop when the server responds
   };
 
   const moveToHome = () => {
@@ -281,50 +276,26 @@ export default function ServoCardHybrid({
   // Function to handle changes to min/max angle limits (local state only for now)
   // To make persistent, these would need to trigger an update in hardwareConfig
   // and potentially send a new configure message via sendMessage
-  const handleMinAngleInputChange = (valueStr: string) => {
+  const handleMinAngleInputChange = async (valueStr: string) => {
     setMinAngleInput(valueStr);
     const newMin = parseInt(valueStr, 10);
     if (!isNaN(newMin)) {
-      const validatedMin = Math.max(0, Math.min(newMin, maxAngle - 1)); // Ensure min < max and >= 0
+      const validatedMin = Math.max(0, Math.min(newMin, maxAngle - 1));
       setMinAngle(validatedMin);
 
-      // Send update to the server
-      sendMessage({
-        action: "configure",
-        componentGroup: "servos",
-        config: {
-          id,
-          name,
-          pin: pins.control,
-          minAngle: validatedMin,
-          maxAngle,
-        },
-      });
       if (onSettingsChange) {
         onSettingsChange(id, { minAngle: validatedMin });
       }
     }
   };
 
-  const handleMaxAngleInputChange = (valueStr: string) => {
+  const handleMaxAngleInputChange = async (valueStr: string) => {
     setMaxAngleInput(valueStr);
     const newMax = parseInt(valueStr, 10);
     if (!isNaN(newMax)) {
-      const validatedMax = Math.min(180, Math.max(newMax, minAngle + 1)); // Ensure max > min and <= 180
+      const validatedMax = Math.min(180, Math.max(newMax, minAngle + 1));
       setMaxAngle(validatedMax);
 
-      // Send update to the server
-      sendMessage({
-        action: "configure",
-        componentGroup: "servos",
-        config: {
-          id,
-          name,
-          pin: pins.control,
-          minAngle,
-          maxAngle: validatedMax,
-        },
-      });
       if (onSettingsChange) {
         onSettingsChange(id, { maxAngle: validatedMax });
       }
@@ -332,25 +303,11 @@ export default function ServoCardHybrid({
   };
 
   // Add function to update servo speed
-  const updateSpeed = (newSpeed: number) => {
-    // Validate and constrain speed
+  const updateSpeed = async (newSpeed: number) => {
     const validSpeed = Math.max(1, Math.min(100, newSpeed));
     setSpeed(validSpeed);
-
     console.log(`[ServoCard ${id}] Setting speed: ${validSpeed}`);
-
     try {
-      // Send immediate control message to update the current speed
-      // This affects the servo's behavior right away
-      sendMessage({
-        action: "control",
-        componentGroup: "servos",
-        id: id,
-        speed: validSpeed,
-      });
-
-      // Update persistent settings in the parent component
-      // This ensures the speed is saved when the configuration is saved
       if (onSettingsChange) {
         onSettingsChange(id, { speed: validSpeed });
       }

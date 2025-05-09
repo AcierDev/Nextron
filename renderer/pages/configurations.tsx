@@ -45,7 +45,10 @@ import {
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
-// Define IPC handler interface
+// Import our Zustand store
+import { useConfigStore, ConfigListItem } from "@/lib/stores";
+
+// Define IPC handler interface (keep this for TypeScript)
 type IPCRemoveListener = () => void;
 interface IPCHandler {
   send: (channel: string, value: unknown) => void;
@@ -63,31 +66,30 @@ declare global {
   }
 }
 
-// Updated Configuration type to match enhanced 'get-configs' response
-type ConfigListItem = {
-  _id: string;
-  name: string;
-  description?: string;
-  updatedAt?: string;
-  hardware?: {
-    servos?: any[];
-    steppers?: any[];
-    pins?: any[];
-  };
-};
-
 export default function ConfigurationsPage() {
   const router = useRouter();
-  const [configurations, setConfigurations] = useState<ConfigListItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  // Connection state from the connection page
+  // Replace state with Zustand store
+  const {
+    configList,
+    isLoadingConfigList,
+    errorMessage,
+    infoMessage,
+    fetchConfigurations,
+    createConfiguration,
+    renameConfiguration,
+    updateConfigDescription,
+    deleteConfiguration,
+    duplicateConfiguration,
+    setErrorMessage,
+    setInfoMessage,
+  } = useConfigStore();
+
+  // Local state remains for UI control
   const [connectionStatus, setConnectionStatus] = useState<string>("unknown");
   const [lastIpOctet, setLastIpOctet] = useState<string>("");
 
-  // New Config Dialog
+  // Dialog states
   const [isNewConfigOpenState, setIsNewConfigOpenState] = useState(false);
   const [newConfigName, setNewConfigName] = useState("");
   const [newConfigDescription, setNewConfigDescription] = useState("");
@@ -195,35 +197,14 @@ export default function ConfigurationsPage() {
       clearInterval(connectionInterval);
       if (wsStatusListener) wsStatusListener();
     };
-  }, []);
+  }, [setErrorMessage]);
 
+  // Fetch configurations with Zustand
   useEffect(() => {
-    const fetchConfigs = async () => {
-      setIsLoading(true);
-      setErrorMessage(null);
-      try {
-        console.log("[ConfigPage] Fetching configurations via IPC...");
-        const data = await window.ipc.invoke("get-configs");
-        if (Array.isArray(data)) {
-          setConfigurations(data);
-          console.log("[ConfigPage] Fetched configurations:", data.length);
-        } else {
-          throw new Error("Invalid data received from backend");
-        }
-      } catch (error) {
-        console.error("[ConfigPage] Failed to fetch configurations:", error);
-        setErrorMessage(
-          `Failed to load configurations: ${(error as Error).message}`
-        );
-        setConfigurations([]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    fetchConfigurations();
+  }, [fetchConfigurations]);
 
-    fetchConfigs();
-  }, []);
-
+  // Auto clear messages
   useEffect(() => {
     let timer: NodeJS.Timeout | null = null;
     if (infoMessage) {
@@ -235,7 +216,14 @@ export default function ConfigurationsPage() {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [infoMessage, isProcessing, isDuplicating, errorMessage]);
+  }, [
+    infoMessage,
+    isProcessing,
+    isDuplicating,
+    errorMessage,
+    setInfoMessage,
+    setErrorMessage,
+  ]);
 
   const handleCreateConfig = async () => {
     const trimmedName = newConfigName.trim();
@@ -244,40 +232,20 @@ export default function ConfigurationsPage() {
       return;
     }
     setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    try {
-      console.log(`[ConfigPage] Creating config: ${trimmedName}`);
-      const newConfig = await window.ipc.invoke(
-        "create-config",
-        trimmedName,
-        newConfigDescription
-      );
-      if (!newConfig || !newConfig._id) {
-        throw new Error("Backend did not return a valid new configuration.");
-      }
-      setConfigurations((prev) =>
-        [
-          ...prev,
-          {
-            _id: newConfig._id,
-            name: newConfig.name,
-            description: newConfig.description,
-            updatedAt: newConfig.updatedAt,
-          },
-        ].sort((a, b) => a.name.localeCompare(b.name))
-      );
+
+    const newConfigId = await createConfiguration(
+      trimmedName,
+      newConfigDescription
+    );
+
+    if (newConfigId) {
       setNewConfigName("");
       setNewConfigDescription("");
       setIsNewConfigOpen(false);
-      setInfoMessage(`Configuration '${newConfig.name}' created.`);
-      router.push(`/dashboard?config=${newConfig._id}`);
-    } catch (error) {
-      console.error("[ConfigPage] Failed to create configuration:", error);
-      setErrorMessage(`Create failed: ${(error as Error).message}`);
-    } finally {
-      setIsProcessing(false);
+      router.push(`/dashboard?config=${newConfigId}`);
     }
+
+    setIsProcessing(false);
   };
 
   const handleRenameConfig = async () => {
@@ -296,38 +264,19 @@ export default function ConfigurationsPage() {
       );
       return;
     }
+
     setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    try {
-      console.log(
-        `[ConfigPage] Renaming config ${renamingConfigId} to ${trimmedNewName}`
-      );
-      await window.ipc.invoke(
-        "rename-config",
-        renamingConfigId,
-        trimmedNewName
-      );
-      setConfigurations((prev) =>
-        prev
-          .map((config) =>
-            config._id === renamingConfigId
-              ? { ...config, name: trimmedNewName }
-              : config
-          )
-          .sort((a, b) => a.name.localeCompare(b.name))
-      );
-      setInfoMessage(`Configuration renamed to '${trimmedNewName}'.`);
+
+    const success = await renameConfiguration(renamingConfigId, trimmedNewName);
+
+    if (success) {
       setIsRenameDialogOpen(false);
       setRenamingConfigId(null);
       setRenamingConfigCurrentName("");
       setConfigNewName("");
-    } catch (error) {
-      console.error("[ConfigPage] Failed to rename configuration:", error);
-      setErrorMessage(`Rename failed: ${(error as Error).message}`);
-    } finally {
-      setIsProcessing(false);
     }
+
+    setIsProcessing(false);
   };
 
   const handleDeleteConfig = async () => {
@@ -336,26 +285,18 @@ export default function ConfigurationsPage() {
       setIsDeleteDialogOpen(false);
       return;
     }
+
     setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    try {
-      console.log(`[ConfigPage] Deleting config: ${deletingConfigId}`);
-      await window.ipc.invoke("delete-config", deletingConfigId);
-      setConfigurations((prev) =>
-        prev.filter((config) => config._id !== deletingConfigId)
-      );
-      setInfoMessage(`Configuration '${deletingConfigName}' deleted.`);
+
+    const success = await deleteConfiguration(deletingConfigId);
+
+    if (success) {
       setDeletingConfigId(null);
       setDeletingConfigName("");
       setIsDeleteDialogOpen(false);
-    } catch (error) {
-      console.error("[ConfigPage] Failed to delete configuration:", error);
-      setErrorMessage(`Delete failed: ${(error as Error).message}`);
-      setIsDeleteDialogOpen(false);
-    } finally {
-      setIsProcessing(false);
     }
+
+    setIsProcessing(false);
   };
 
   const handleLoadConfig = (id: string) => {
@@ -372,36 +313,22 @@ export default function ConfigurationsPage() {
       setErrorMessage("Error: No config ID for description update.");
       return;
     }
+
     setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    try {
-      console.log(
-        `[ConfigPage] Updating description for config ${editingConfigId}`
-      );
-      await window.ipc.invoke(
-        "update-description",
-        editingConfigId,
-        configDescription
-      );
-      setConfigurations((prev) =>
-        prev.map((config) =>
-          config._id === editingConfigId
-            ? { ...config, description: configDescription }
-            : config
-        )
-      );
-      setInfoMessage("Configuration description updated.");
+
+    const success = await updateConfigDescription(
+      editingConfigId,
+      configDescription
+    );
+
+    if (success) {
       setIsDescriptionDialogOpen(false);
       setEditingConfigId(null);
       setEditingConfigName("");
       setConfigDescription("");
-    } catch (error) {
-      console.error("[ConfigPage] Failed to update description:", error);
-      setErrorMessage(`Update failed: ${(error as Error).message}`);
-    } finally {
-      setIsProcessing(false);
     }
+
+    setIsProcessing(false);
   };
 
   // Handle duplicating a configuration
@@ -410,40 +337,11 @@ export default function ConfigurationsPage() {
 
     setIsDuplicating(true);
     setDuplicatingConfigId(configId);
-    setErrorMessage(null);
-    setInfoMessage(null);
 
-    try {
-      console.log(`[ConfigPage] Duplicating config: ${configId}`);
-      const newConfig = await window.ipc.invoke("duplicate-config", configId);
+    await duplicateConfiguration(configId);
 
-      if (!newConfig || !newConfig._id) {
-        throw new Error(
-          "Backend did not return a valid duplicated configuration."
-        );
-      }
-
-      setConfigurations((prev) =>
-        [
-          ...prev,
-          {
-            _id: newConfig._id,
-            name: newConfig.name,
-            description: newConfig.description,
-            updatedAt: newConfig.updatedAt,
-            hardware: newConfig.hardware,
-          },
-        ].sort((a, b) => a.name.localeCompare(b.name))
-      );
-
-      setInfoMessage(`Configuration '${newConfig.name}' created as a copy.`);
-    } catch (error) {
-      console.error("[ConfigPage] Failed to duplicate configuration:", error);
-      setErrorMessage(`Duplication failed: ${(error as Error).message}`);
-    } finally {
-      setIsDuplicating(false);
-      setDuplicatingConfigId(null);
-    }
+    setIsDuplicating(false);
+    setDuplicatingConfigId(null);
   };
 
   // Helper function to format date
@@ -470,7 +368,7 @@ export default function ConfigurationsPage() {
     return { servosCount, steppersCount, ioCount };
   };
 
-  if (isLoading) {
+  if (isLoadingConfigList) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-gray-900 to-gray-950">
         <Loader2 className="h-12 w-12 animate-spin text-blue-400" />
@@ -576,7 +474,7 @@ export default function ConfigurationsPage() {
           )}
         </AnimatePresence>
 
-        {configurations.length === 0 && !errorMessage ? (
+        {configList.length === 0 && !errorMessage ? (
           <div className="text-center py-12 backdrop-blur-sm bg-white/30 dark:bg-gray-800/30 rounded-xl border border-white/20 dark:border-gray-700/30 shadow-lg">
             <h2 className="text-xl font-semibold mb-2 text-gray-800 dark:text-gray-200">
               No Configurations Found
@@ -605,7 +503,7 @@ export default function ConfigurationsPage() {
             animate="visible"
             variants={{ visible: { transition: { staggerChildren: 0.05 } } }}
           >
-            {configurations.map((config) => {
+            {configList.map((config) => {
               const summary = getHardwareSummary(config);
               return (
                 <motion.div

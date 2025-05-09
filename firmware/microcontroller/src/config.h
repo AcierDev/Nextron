@@ -80,6 +80,14 @@ struct StepperConfig {
   bool isHomed = false;
   unsigned long lastPositionReportTime = 0;
 
+  String homeSensorId;           // ID of the IoPinConfig to use as a sensor
+  int homingDirection;           // -1 for negative, 1 for positive movement
+  float homingSpeed;             // Speed in steps/sec for the homing move
+  bool isHoming;                 // Flag to indicate a homing sequence is active
+  int homeSensorPinActiveState;  // The state (LOW or HIGH) that indicates
+                                 // sensor trigger
+  long homePositionOffset;
+
   // Action completion tracking
   bool isActionPending = false;  // Whether an action is in progress
   String pendingCommandId = "";  // ID of the pending command (if any)

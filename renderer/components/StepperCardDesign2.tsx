@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 // Define WebSocket message sending function type
-type SendMessage = (message: object) => void;
+type SendMessage = (message: object) => Promise<boolean>;
 
 interface StepperCardProps {
   id: string;
@@ -51,6 +51,13 @@ interface StepperCardProps {
     direction: number;
     enable?: number;
   };
+  availableIoPins?: Array<{
+    id: string;
+    name: string;
+    pin: number;
+    pinMode: string;
+    pinType: string;
+  }>; // Added for sensor selection
   onDelete: () => void;
   onDuplicate: () => void;
   onEditPins: () => void;
@@ -66,31 +73,50 @@ interface StepperCardProps {
       jogAmountInches?: number; // Corresponds to inches if jogUnit is inches
       speed?: number;
       acceleration?: number;
+      // Homing settings
+      homeSensorId?: string | null; // Allow null or empty string for no sensor
+      homingDirection?: number;
+      homingSpeed?: number;
+      homeSensorPinActiveState?: number; // LOW (0) or HIGH (1)
+      homePositionOffset?: number;
     }
   ) => void;
   initialJogUnit?: "steps" | "inches";
   initialJogAmount?: number;
   initialJogAmountInches?: number;
+  // Initial Homing settings from props
+  initialHomeSensorId?: string | null;
+  initialHomingDirection?: number;
+  initialHomingSpeed?: number;
+  initialHomeSensorPinActiveState?: number;
+  initialHomePositionOffset?: number;
 }
 
 export default function StepperCardDesign2({
   id,
   name,
-  position, // Use the passed-in position directly
+  position,
   speed: initialSpeed,
   acceleration: initialAcceleration,
   stepsPerInch: initialStepsPerInch,
   minPosition: initialMinPosition,
   maxPosition: initialMaxPosition,
   pins,
+  availableIoPins = [], // Default to empty array
   onDelete,
   onDuplicate,
   onEditPins,
-  sendMessage, // Destructure sendMessage
+  sendMessage,
   onSettingsChange,
   initialJogUnit,
   initialJogAmount,
   initialJogAmountInches,
+  // Destructure initial homing settings
+  initialHomeSensorId = null,
+  initialHomingDirection = 1,
+  initialHomingSpeed = 1000,
+  initialHomeSensorPinActiveState = 0, // Default to Active LOW
+  initialHomePositionOffset = 0,
 }: StepperCardProps) {
   // Settings State (can be adjusted by user)
   const [speed, setSpeed] = useState(initialSpeed);
@@ -98,6 +124,28 @@ export default function StepperCardDesign2({
   const [stepsPerInch, setStepsPerInch] = useState(initialStepsPerInch);
   const [minPosition, setMinPosition] = useState(initialMinPosition);
   const [maxPosition, setMaxPosition] = useState(initialMaxPosition);
+
+  // Homing State
+  const [homeSensorId, setHomeSensorId] = useState<string | null>(
+    initialHomeSensorId
+  );
+  const [homingDirection, setHomingDirection] = useState(
+    initialHomingDirection
+  );
+  const [homingSpeed, setHomingSpeed] = useState(initialHomingSpeed);
+  const [homeSensorPinActiveState, setHomeSensorPinActiveState] = useState(
+    initialHomeSensorPinActiveState
+  );
+  const [homePositionOffset, setHomePositionOffset] = useState(
+    initialHomePositionOffset
+  );
+
+  // String states for homing inputs
+  const [homingSpeedInput, setHomingSpeedInput] = useState<string>(
+    initialHomingSpeed.toString()
+  );
+  const [homePositionOffsetInput, setHomePositionOffsetInput] =
+    useState<string>(initialHomePositionOffset.toString());
 
   // String states for inputs
   const [stepsPerInchInput, setStepsPerInchInput] = useState<string>(
@@ -114,21 +162,24 @@ export default function StepperCardDesign2({
   const [targetMoveValue, setTargetMoveValue] = useState<string>("0"); // Store input as string
   const [moveToUnit, setMoveToUnit] = useState<"steps" | "inches">("steps"); // State for unit selection
 
-  // Jogging State - Initialize from props or defaults
+  // Use refs to store initial values for jog settings to prevent reset on prop change
+  const initialJogUnitRef = useRef(initialJogUnit ?? "steps");
+  const initialJogAmountRef = useRef(initialJogAmount ?? 200);
+  const initialJogAmountInchesRef = useRef(initialJogAmountInches ?? 0.1);
+
+  // Jogging State - Initialize from REFS or defaults
   const [jogUnit, setJogUnit] = useState<"steps" | "inches">(
-    initialJogUnit ?? "steps"
+    initialJogUnitRef.current
   );
-
-  const [jogAmount, setJogAmount] = useState(initialJogAmount ?? 200); // Numeric state for steps
+  const [jogAmount, setJogAmount] = useState(initialJogAmountRef.current);
   const [jogAmountInput, setJogAmountInput] = useState<string>(
-    (initialJogAmount ?? 200).toString()
+    initialJogAmountRef.current.toString()
   );
-
   const [jogAmountInches, setJogAmountInches] = useState(
-    initialJogAmountInches ?? 0.1
-  ); // Numeric state for inches
+    initialJogAmountInchesRef.current
+  );
   const [jogAmountInchesInput, setJogAmountInchesInput] = useState<string>(
-    (initialJogAmountInches ?? 0.1).toString()
+    initialJogAmountInchesRef.current.toString()
   );
 
   // Continuous Movement State
@@ -136,7 +187,7 @@ export default function StepperCardDesign2({
   const [isMovingRight, setIsMovingRight] = useState(false);
   const moveIntervalRef = useRef<NodeJS.Timeout | null>(null); // Ref to hold interval ID
 
-  // Effect to sync with prop changes
+  // Effect to sync with prop changes (but NOT for jog settings after initial mount)
   useEffect(() => {
     setSpeed(initialSpeed);
     setAcceleration(initialAcceleration);
@@ -144,23 +195,52 @@ export default function StepperCardDesign2({
     setMinPosition(initialMinPosition);
     setMaxPosition(initialMaxPosition);
 
-    // Sync string inputs with initial prop-derived values
     setStepsPerInchInput(initialStepsPerInch.toString());
     setMinPositionInput(initialMinPosition.toString());
     setMaxPositionInput(initialMaxPosition.toString());
 
-    // Sync jog settings from props
-    setJogUnit(initialJogUnit ?? "steps");
-    setJogAmount(initialJogAmount ?? 200);
-    setJogAmountInput((initialJogAmount ?? 200).toString());
-    setJogAmountInches(initialJogAmountInches ?? 0.1);
-    setJogAmountInchesInput((initialJogAmountInches ?? 0.1).toString());
+    // Sync homing settings from props (these are fine to sync as they are less frequently changed from within the card itself)
+    setHomeSensorId(initialHomeSensorId);
+    setHomingDirection(initialHomingDirection);
+    setHomingSpeed(initialHomingSpeed);
+    setHomingSpeedInput(initialHomingSpeed.toString());
+    setHomeSensorPinActiveState(initialHomeSensorPinActiveState);
+    setHomePositionOffset(initialHomePositionOffset);
+    setHomePositionOffsetInput(initialHomePositionOffset.toString());
+
+    // On mount or ID change, re-evaluate initial jog settings from props if they exist
+    // This allows the dashboard to set new defaults if the component instance changes
+    // or if we want to explicitly re-initialize from new prop values (e.g., after duplication).
+    // However, for typical prop updates WHILE the component is mounted for the *same* motor,
+    // we want the local state (set by user interaction) to persist.
+    if (initialJogUnit !== undefined && initialJogUnit !== jogUnit) {
+      setJogUnit(initialJogUnit);
+    }
+    if (initialJogAmount !== undefined && initialJogAmount !== jogAmount) {
+      setJogAmount(initialJogAmount);
+      setJogAmountInput(initialJogAmount.toString());
+    }
+    if (
+      initialJogAmountInches !== undefined &&
+      initialJogAmountInches !== jogAmountInches
+    ) {
+      setJogAmountInches(initialJogAmountInches);
+      setJogAmountInchesInput(initialJogAmountInches.toString());
+    }
   }, [
+    id, // Keep id, if the component is for a new motor, re-init everything
     initialSpeed,
     initialAcceleration,
     initialStepsPerInch,
     initialMinPosition,
     initialMaxPosition,
+    // REMOVED: initialJogUnit, initialJogAmount, initialJogAmountInches from here
+    initialHomeSensorId,
+    initialHomingDirection,
+    initialHomingSpeed,
+    initialHomeSensorPinActiveState,
+    initialHomePositionOffset,
+    // Add jogUnit, jogAmount, jogAmountInches to dependency array to react to their changes from props (if forced by parent)
     initialJogUnit,
     initialJogAmount,
     initialJogAmountInches,
@@ -168,12 +248,11 @@ export default function StepperCardDesign2({
 
   // Effect to send min/max/stepsPerInch changes back to the server
   useEffect(() => {
-    // Send configuration updates when these values change
-    const handleConfigUpdate = () => {
+    const handleConfigUpdate = async () => {
       console.log(
         `[StepperCard ${id}] Updating configuration: min=${minPosition}, max=${maxPosition}, stepsPerInch=${stepsPerInch}`
       );
-      sendMessage({
+      await sendMessage({
         action: "control",
         componentGroup: "steppers",
         id,
@@ -184,7 +263,6 @@ export default function StepperCardDesign2({
       });
     };
 
-    // Add a small delay to avoid rapid config changes
     const timeoutId = setTimeout(handleConfigUpdate, 500);
     return () => clearTimeout(timeoutId);
   }, [minPosition, maxPosition, stepsPerInch, id, sendMessage]);
@@ -218,49 +296,62 @@ export default function StepperCardDesign2({
     }
   }, [jogAmountInches]); // Removed jogAmountInchesInput from dependency array
 
+  useEffect(() => {
+    // Update input string if numeric state changes
+    const currentSpeedStr = homingSpeed.toString();
+    if (homingSpeedInput !== currentSpeedStr) {
+      setHomingSpeedInput(currentSpeedStr);
+    }
+  }, [homingSpeed]);
+
+  useEffect(() => {
+    const currentOffsetStr = homePositionOffset.toString();
+    if (homePositionOffsetInput !== currentOffsetStr) {
+      setHomePositionOffsetInput(currentOffsetStr);
+    }
+  }, [homePositionOffset]);
+
   // Effect to handle continuous movement via repeated step commands
   useEffect(() => {
     const stepAmountForHold = 100; // Adjust step size for hold smoothness
     const intervalDuration = 100; // Adjust interval speed (ms)
 
-    if ((isMovingLeft || isMovingRight) && !moveIntervalRef.current) {
+    const sendHoldStep = async () => {
       const directionMultiplier = isMovingLeft ? -1 : 1;
       const stepsToMove = stepAmountForHold * directionMultiplier;
+      console.log(`[StepperCard ${id}] Sending hold step: ${stepsToMove}`);
+      await sendMessage({
+        action: "control",
+        componentGroup: "steppers",
+        id: id,
+        command: "step",
+        value: stepsToMove,
+      });
+    };
 
-      moveIntervalRef.current = setInterval(() => {
-        console.log(`[StepperCard ${id}] Sending hold step: ${stepsToMove}`);
-        sendMessage({
-          action: "control",
-          componentGroup: "steppers",
-          id: id,
-          command: "step",
-          value: stepsToMove,
-        });
-      }, intervalDuration);
+    if ((isMovingLeft || isMovingRight) && !moveIntervalRef.current) {
+      moveIntervalRef.current = setInterval(sendHoldStep, intervalDuration);
     } else if (!isMovingLeft && !isMovingRight && moveIntervalRef.current) {
       clearInterval(moveIntervalRef.current);
       moveIntervalRef.current = null;
       console.log(`[StepperCard ${id}] Clearing hold interval.`);
-      // Optional: Send a stop command if your firmware uses it
-      // sendMessage({ action: 'control', componentGroup: 'steppers', id, command: 'stop' });
     }
 
-    // Cleanup interval on unmount
     return () => {
       if (moveIntervalRef.current) {
         clearInterval(moveIntervalRef.current);
         moveIntervalRef.current = null;
       }
     };
-  }, [isMovingLeft, isMovingRight, id, sendMessage]); // Rerun if moving state changes
+  }, [isMovingLeft, isMovingRight, id, sendMessage]);
 
-  const moveToPosition = (pos: number) => {
+  const moveToPosition = async (pos: number) => {
     let limitedPos = Math.round(pos); // Ensure integer steps
     if (limitedPos < minPosition) limitedPos = minPosition;
     if (limitedPos > maxPosition) limitedPos = maxPosition;
 
     console.log(`[StepperCard ${id}] Sending move to: ${limitedPos} steps`);
-    sendMessage({
+    await sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
@@ -269,11 +360,11 @@ export default function StepperCardDesign2({
     });
   };
 
-  const moveToHome = () => {
+  const moveToHome = async () => {
     console.log(
       `[StepperCard ${id}] Sending home command (move to predefined home)`
     );
-    sendMessage({
+    await sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
@@ -282,11 +373,11 @@ export default function StepperCardDesign2({
   };
 
   // New function to set the current physical position as the logical zero
-  const setCurrentPositionAsHome = () => {
+  const setCurrentPositionAsHome = async () => {
     console.log(
       `[StepperCard ${id}] Setting current position (${position}) as new home (0)`
     );
-    sendMessage({
+    await sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
@@ -298,9 +389,9 @@ export default function StepperCardDesign2({
     // Or even force a state update if position prop doesn't update immediately
   };
 
-  const moveSteps = (steps: number) => {
+  const moveSteps = async (steps: number) => {
     console.log(`[StepperCard ${id}] Sending step command: ${steps}`);
-    sendMessage({
+    await sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
@@ -310,11 +401,11 @@ export default function StepperCardDesign2({
   };
 
   // Function to send speed/acceleration updates
-  const sendSpeedAccelUpdate = () => {
+  const sendSpeedAccelUpdate = async () => {
     console.log(
       `[StepperCard ${id}] Sending speed/accel update: Speed=${speed}, Accel=${acceleration}`
     );
-    sendMessage({
+    await sendMessage({
       action: "control",
       componentGroup: "steppers",
       id: id,
@@ -708,6 +799,7 @@ export default function StepperCardDesign2({
                   value={jogUnit}
                   onValueChange={(value: "steps" | "inches") => {
                     setJogUnit(value);
+                    console.log(`[StepperCard ${id}] Jog unit set to ${value}`);
                     if (onSettingsChange) {
                       onSettingsChange(id, { jogUnit: value });
                     }
@@ -772,6 +864,162 @@ export default function StepperCardDesign2({
                     placeholder="e.g. 0.1"
                   />
                 </div>
+              )}
+            </div>
+
+            {/* Homing Sensor Settings Section */}
+            <div className="border rounded-md p-3 space-y-3">
+              <Label className="font-medium">Homing Sensor Settings</Label>
+              <div>
+                <Label htmlFor={`${id}-home-sensor-select`}>
+                  Home Sensor Pin
+                </Label>
+                <Select
+                  value={homeSensorId || ""} // Use empty string for placeholder when homeSensorId is null
+                  onValueChange={(value) => {
+                    const newSensorId = value === "__NONE__" ? null : value; // Treat "__NONE__" as null
+                    setHomeSensorId(newSensorId);
+                    if (onSettingsChange) {
+                      onSettingsChange(id, { homeSensorId: newSensorId });
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    id={`${id}-home-sensor-select`}
+                    className="mt-1"
+                  >
+                    <SelectValue placeholder="Select sensor pin..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__NONE__">None</SelectItem>{" "}
+                    {/* Use a non-empty string for "None" item */}
+                    {availableIoPins
+                      .filter((pin) => pin.pinMode === "input") // Only show input pins
+                      .map((pin) => (
+                        <SelectItem key={pin.id} value={pin.id}>
+                          {pin.name} (Pin {pin.pin})
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {homeSensorId && (
+                <>
+                  <div>
+                    <Label htmlFor={`${id}-homing-direction`}>
+                      Homing Direction
+                    </Label>
+                    <Select
+                      value={homingDirection.toString()} // Stored as 1 or -1
+                      onValueChange={(value) => {
+                        const newDirection = parseInt(value, 10);
+                        setHomingDirection(newDirection);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, {
+                            homingDirection: newDirection,
+                          });
+                        }
+                      }}
+                    >
+                      <SelectTrigger
+                        id={`${id}-homing-direction`}
+                        className="mt-1"
+                      >
+                        <SelectValue placeholder="Select direction" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">
+                          Positive / Towards Max
+                        </SelectItem>
+                        <SelectItem value="-1">
+                          Negative / Towards Min
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor={`${id}-homing-speed`}>
+                      Homing Speed (steps/sec)
+                    </Label>
+                    <Input
+                      id={`${id}-homing-speed`}
+                      type="text"
+                      value={homingSpeedInput}
+                      onChange={(e) => {
+                        setHomingSpeedInput(e.target.value);
+                        const numVal = Number(e.target.value);
+                        if (!isNaN(numVal) && numVal > 0) {
+                          setHomingSpeed(numVal);
+                          if (onSettingsChange) {
+                            onSettingsChange(id, { homingSpeed: numVal });
+                          }
+                        }
+                      }}
+                      className="mt-1"
+                      placeholder="e.g. 1000"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor={`${id}-home-sensor-active-state`}>
+                      Sensor Active State
+                    </Label>
+                    <Select
+                      value={homeSensorPinActiveState.toString()} // Stored as 0 (LOW) or 1 (HIGH)
+                      onValueChange={(value) => {
+                        const newState = parseInt(value, 10);
+                        setHomeSensorPinActiveState(newState);
+                        if (onSettingsChange) {
+                          onSettingsChange(id, {
+                            homeSensorPinActiveState: newState,
+                          });
+                        }
+                      }}
+                    >
+                      <SelectTrigger
+                        id={`${id}-home-sensor-active-state`}
+                        className="mt-1"
+                      >
+                        <SelectValue placeholder="Select active state" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0">
+                          Active LOW (sensor triggers LOW)
+                        </SelectItem>
+                        <SelectItem value="1">
+                          Active HIGH (sensor triggers HIGH)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor={`${id}-home-pos-offset`}>
+                      Home Position Offset (Steps)
+                    </Label>
+                    <Input
+                      id={`${id}-home-pos-offset`}
+                      type="text"
+                      value={homePositionOffsetInput}
+                      onChange={(e) => {
+                        setHomePositionOffsetInput(e.target.value);
+                        const numVal = Number(e.target.value);
+                        if (!isNaN(numVal)) {
+                          setHomePositionOffset(numVal);
+                          if (onSettingsChange) {
+                            onSettingsChange(id, {
+                              homePositionOffset: numVal,
+                            });
+                          }
+                        }
+                      }}
+                      className="mt-1"
+                      placeholder="e.g. 0 or 100"
+                    />
+                  </div>
+                </>
               )}
             </div>
           </TabsContent>

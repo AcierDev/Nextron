@@ -39,6 +39,9 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 
+// Define WebSocket message sending function type
+type SendMessage = (message: object) => Promise<boolean>; // Update return type
+
 interface IOPinCardProps {
   id: string;
   name: string;
@@ -49,7 +52,14 @@ interface IOPinCardProps {
   onDelete: () => void;
   onDuplicate: () => void;
   onEditPin: () => void;
-  sendMessage?: (message: object) => boolean;
+  sendMessage?: SendMessage; // Make it optional if not always provided
+  initialPullMode?: number;
+  initialDebounceMs?: number;
+  onSettingsChange?: (
+    pullMode: number,
+    debounceMs: number,
+    pinId: string
+  ) => void;
 }
 
 export default function IOPinCard({
@@ -63,11 +73,14 @@ export default function IOPinCard({
   onDuplicate,
   onEditPin,
   sendMessage,
+  initialPullMode,
+  initialDebounceMs,
+  onSettingsChange,
 }: IOPinCardProps) {
   const [value, setValue] = useState(initialValue);
   const [autoRefresh, setAutoRefresh] = useState(false); // Default to false since we now use events
-  const [pullMode, setPullMode] = useState<number>(0); // 0: none, 1: pullup, 2: pulldown
-  const [debounceMs, setDebounceMs] = useState<number>(0); // Default 0 = no debouncing
+  const [pullMode, setPullMode] = useState<number>(initialPullMode ?? 0); // 0: none, 1: pullup, 2: pulldown
+  const [debounceMs, setDebounceMs] = useState<number>(initialDebounceMs ?? 0); // Default 0 = no debouncing
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
@@ -76,22 +89,26 @@ export default function IOPinCard({
 
   // Send pin configuration update when pull mode or debounce settings change
   useEffect(() => {
-    if (isPinConfigChanged && sendMessage) {
-      sendMessage({
-        action: "configure",
-        componentGroup: "pins",
-        config: {
-          id,
-          name,
-          pin: pinNumber,
-          mode,
-          pinType: type,
-          pullMode,
-          debounceMs,
-        },
-      });
-      setIsPinConfigChanged(false);
-    }
+    const sendConfig = async () => {
+      if (isPinConfigChanged && sendMessage) {
+        await sendMessage({
+          // Await the promise
+          action: "configure",
+          componentGroup: "pins",
+          config: {
+            id,
+            name,
+            pin: pinNumber,
+            mode,
+            pinType: type,
+            pullMode,
+            debounceMs,
+          },
+        });
+        setIsPinConfigChanged(false);
+      }
+    };
+    sendConfig();
   }, [
     isPinConfigChanged,
     id,
@@ -164,11 +181,13 @@ export default function IOPinCard({
   }, [mode, autoRefresh, id, pinNumber, sendMessage, type]);
 
   // Handle manual refresh for input pins
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
+    // Make async
     if (mode !== "input" || !sendMessage) return;
 
     // Send a message to request the current pin value
-    sendMessage({
+    await sendMessage({
+      // Await the promise
       action: "readPin",
       componentGroup: "pins",
       id: id,
@@ -179,13 +198,15 @@ export default function IOPinCard({
   };
 
   // Handle value change for output pins
-  const handleValueChange = (newValue: number) => {
+  const handleValueChange = async (newValue: number) => {
+    // Make async
     if (mode !== "output" || !sendMessage) return;
 
     setValue(newValue);
 
     // Send the new value to the device
-    sendMessage({
+    await sendMessage({
+      // Await the promise
       action: "writePin",
       componentGroup: "pins",
       id: id,
@@ -196,13 +217,15 @@ export default function IOPinCard({
   };
 
   // Toggle digital output
-  const toggleDigitalOutput = () => {
+  const toggleDigitalOutput = async () => {
+    // Make async
     if (mode !== "output" || type !== "digital" || !sendMessage) return;
     const newValue = value === 0 ? 1 : 0;
     setValue(newValue);
 
     // Send the new value to the device
-    sendMessage({
+    await sendMessage({
+      // Await the promise
       action: "writePin",
       componentGroup: "pins",
       id: id,
@@ -217,13 +240,20 @@ export default function IOPinCard({
     const newPullMode = parseInt(value, 10);
     setPullMode(newPullMode);
     setIsPinConfigChanged(true);
+    if (onSettingsChange) {
+      onSettingsChange(newPullMode, debounceMs, id);
+    }
   };
 
   // Handle debounce setting change
   const handleDebounceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = parseInt(e.target.value, 10);
-    setDebounceMs(isNaN(newValue) ? 0 : newValue);
+    const newDebounceMs = isNaN(newValue) ? 0 : newValue;
+    setDebounceMs(newDebounceMs);
     setIsPinConfigChanged(true);
+    if (onSettingsChange) {
+      onSettingsChange(pullMode, newDebounceMs, id);
+    }
   };
 
   // Format value display based on pin type

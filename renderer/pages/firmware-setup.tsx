@@ -265,13 +265,48 @@ export default function FirmwareSetupPage() {
           setUploadStage("verifying");
           setUploadProgress(97);
         } else if (line.includes("Hard resetting via RTS pin")) {
-          setUploadStage("completed");
+          setUploadStage("completed"); // Tentative stage
           setUploadProgress(98);
-        } else if (line.includes("=========================")) {
-          setUploadProgress(99);
-        } else if (line.includes("[SUCCESS]")) {
+        } else if (
+          line.includes("=========================") &&
+          line.includes("[SUCCESS]") &&
+          line.includes("Took")
+        ) {
+          // Specific success line for an environment, e.g.:
+          // stdout: ========================= [SUCCESS] Took 24.22 seconds =========================
           setUploadStage("completed");
           setUploadProgress(100);
+        } else if (
+          line.includes("=========================") &&
+          line.includes("[FAILED]") &&
+          line.includes("Took")
+        ) {
+          // Specific failure line for an environment, e.g.:
+          // stderr: ========================= [FAILED] Took 10.97 seconds =========================
+          setUploadStage("error");
+          // Let the main catch block in handleFlashFirmware determine overall status and message.
+          // Progress will likely stop updating here or be overridden by handleFlashFirmware.
+        } else if (
+          line.includes("====================") &&
+          (line.includes("failed") || line.includes("succeeded")) &&
+          line.includes("in")
+        ) {
+          // Overall summary line from pio, e.g.:
+          // stderr: ==================== 1 failed, 1 succeeded in 00:00:35.190 ====================
+          // This can provide context if the main process didn't terminate early.
+          if (line.includes("failed")) {
+            // If a failure is reported in the summary, ensure stage reflects error,
+            // unless a specific environment success already set it to completed and main process will resolve successfully.
+            if (uploadStage !== "completed") {
+              // Avoid overriding a deliberate early success completion
+              setUploadStage("error");
+            }
+          } else if (uploadStage !== "error" && uploadStage !== "completed") {
+            // Don't override specific error or early success
+            // Only if no specific env error/success was caught and we see overall success.
+            setUploadStage("completed");
+            setUploadProgress(100);
+          }
         }
       }
     });

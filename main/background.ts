@@ -282,6 +282,7 @@ function getPioPath(): string {
       preload: path.join(__dirname, "preload.js"),
     },
   });
+  mainWindow.setFullScreen(true);
 
   // Clean up on app quit
   app.on("will-quit", () => {
@@ -318,8 +319,10 @@ ipcMain.handle("flash-firmware", async (event, port: string) => {
   console.log("Using PlatformIO executable:", pioPath);
 
   return new Promise((resolve, reject) => {
+    let pioProcess: ChildProcess | null = null; // Store the process reference
+
     // Run PlatformIO upload command with the full path
-    const process = spawn(pioPath, [
+    pioProcess = spawn(pioPath, [
       "run",
       "--target",
       "upload",
@@ -331,38 +334,160 @@ ipcMain.handle("flash-firmware", async (event, port: string) => {
 
     let output = "";
     let errorOutput = "";
+    let firstUploadSucceeded = false;
+    let anEnvironmentProcessed = false;
+    let currentEnvironment = "";
 
-    process.stdout.on("data", (data) => {
+    pioProcess.stdout.on("data", (data) => {
       const chunk = data.toString();
       output += chunk;
       console.log(`stdout: ${chunk}`);
-
-      // Send real-time output to renderer
       event.sender.send("firmware-upload-progress", chunk);
+
+      // Check for environment processing
+      if (chunk.includes("Processing esp32 (")) {
+        currentEnvironment = "esp32";
+        anEnvironmentProcessed = true;
+      } else if (chunk.includes("Processing esp32-s3 (")) {
+        currentEnvironment = "esp32-s3";
+        anEnvironmentProcessed = true;
+      }
+
+      // Check for success of the first environment (esp32)
+      if (
+        currentEnvironment === "esp32" &&
+        chunk.includes("======== [SUCCESS] Took")
+      ) {
+        console.log(
+          "ESP32 environment succeeded. Attempting to terminate further uploads."
+        );
+        firstUploadSucceeded = true;
+        if (pioProcess && !pioProcess.killed) {
+          try {
+            // Kill the main process and all its children (PlatformIO spawns esptool.py)
+            // On Unix-like systems, sending SIGTERM to the negative PID of the process group kills the group.
+            // For Windows, taskkill with /T is needed, but process.kill() with SIGTERM might be enough
+            // if PlatformIO handles it gracefully. We'll start with SIGTERM.
+            const killed = process.kill(-pioProcess.pid, "SIGTERM"); // Send SIGTERM to the process group
+            console.log(
+              `Attempted to kill process group ${pioProcess.pid}: ${killed}`
+            );
+            if (!killed) {
+              // Fallback if group kill fails (e.g. permissions, or not supported as expected)
+              pioProcess.kill("SIGTERM");
+              console.log(
+                `Fallback: Attempted to kill process ${pioProcess.pid}`
+              );
+            }
+          } catch (err) {
+            console.error("Error attempting to kill PlatformIO process:", err);
+            // If killing fails, we let it run its course,
+            // but still resolve positively for the frontend.
+          }
+        }
+        // Resolve immediately for the frontend
+        resolve({ success: true, output, earlyTermination: true });
+      }
     });
 
-    process.stderr.on("data", (data) => {
+    pioProcess.stderr.on("data", (data) => {
       const chunk = data.toString();
       errorOutput += chunk;
       console.error(`stderr: ${chunk}`);
-
-      // Also send stderr to renderer
       event.sender.send("firmware-upload-progress", chunk);
+
+      // Check for failure of esp32-s3 if esp32 already succeeded
+      if (
+        firstUploadSucceeded &&
+        currentEnvironment === "esp32-s3" &&
+        chunk.includes("[FAILED]")
+      ) {
+        console.warn(
+          "esp32-s3 failed after esp32 success, but we already reported success. This is expected if termination was slow."
+        );
+        // Do not reject here as we've already resolved for esp32 success
+      }
     });
 
-    process.on("close", (code) => {
+    pioProcess.on("error", (err) => {
+      console.error("Failed to start PlatformIO process:", err);
+      if (!firstUploadSucceeded) {
+        // Only reject if we haven't already succeeded
+        reject({
+          success: false,
+          error: `Failed to start process: ${err.message}`,
+        });
+      } else {
+        console.log(
+          "PlatformIO process error occurred after successful first upload resolution."
+        );
+      }
+    });
+
+    pioProcess.on("close", (code) => {
+      console.log(`PlatformIO process exited with code ${code}`);
+      if (firstUploadSucceeded) {
+        console.log(
+          "Process closed after successful first upload and termination attempt."
+        );
+        // Promise should have already been resolved. If not (e.g., kill failed silently and esp32-s3 ran),
+        // we ensure it resolves as success because the primary target (esp32) was met.
+        // This check ensures we don't call resolve multiple times if it was already called.
+        // A more robust way is to check if the promise is still pending.
+        // For simplicity here, we assume the resolve in stdout listener was called.
+        // However, if resolve wasn't called (e.g. kill signal was too slow and esp32-s3 failed)
+        // we still consider it a success because esp32 passed.
+        // A better approach for promise state checking might be needed if this becomes an issue.
+        // For now, we rely on firstUploadSucceeded ensuring resolve was called.
+        // Let's ensure resolve is called if it wasn't for some reason due to timing.
+        // This is tricky because a promise can only be resolved/rejected once.
+        // A simple flag on the promise itself or a wrapper could manage this.
+        // For now, the resolve in stdout should handle it.
+        // If it gets here and firstUploadSucceeded is true, and resolve was not called,
+        // it implies the kill was ineffective and the process ran to completion.
+        // We should have already resolved.
+        return;
+      }
+
+      // If it's not an early success termination, proceed with normal exit code handling
       if (code === 0) {
-        // Send final success message
+        // This case means all environments (if not terminated early) completed successfully
+        // or the intended single environment (if specified and not esp32) succeeded.
         event.sender.send(
           "firmware-upload-progress",
-          "[SUCCESS] Took X seconds"
+          `[SUCCESS] PlatformIO process completed.`
         );
         resolve({ success: true, output });
       } else {
-        reject({
-          success: false,
-          error: errorOutput || `Process exited with code ${code}`,
-        });
+        // Check if an environment was processed. If not, it's a general pio error.
+        if (
+          !anEnvironmentProcessed &&
+          errorOutput.includes("Error: Please specify `upload_port`")
+        ) {
+          reject({
+            success: false,
+            error:
+              "Error: Please specify `upload_port` or ensure the serial port is available. " +
+              errorOutput,
+          });
+        } else if (
+          !anEnvironmentProcessed &&
+          errorOutput.includes("pio ENOENT")
+        ) {
+          reject({
+            success: false,
+            error:
+              "PlatformIO (pio) command not found. Please ensure PlatformIO is installed and in your PATH. " +
+              errorOutput,
+          });
+        } else {
+          reject({
+            success: false,
+            error:
+              errorOutput ||
+              `PlatformIO process exited with code ${code}. Full output: ${output}`,
+          });
+        }
       }
     });
   });

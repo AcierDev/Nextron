@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 # Component Organization Best Practices
 
@@ -12,7 +12,7 @@ Large files with many components are difficult to maintain, test, and understand
 - Split large components into smaller, focused components
 - Aim for files under 300-400 lines of code
 - Each file should have a single primary responsibility
-- Components that exceed 500 lines are candidates for refactoring
+- Components that exceed 200 lines are candidates for refactoring
 
 ## Examples from Codebase
 

@@ -12,6 +12,7 @@ export interface ConfiguredComponent {
   minAngle?: number;
   maxAngle?: number;
   presets?: number[]; // Added for servo presets
+  speed?: number; // Added for servo speed config
   // Stepper specific
   maxSpeed?: number;
   acceleration?: number;
@@ -21,6 +22,15 @@ export interface ConfiguredComponent {
   jogUnit?: "steps" | "inches"; // Added
   jogAmount?: number; // Added - for steps
   jogAmountInches?: number; // Added - for inches
+  // Stepper Homing specific
+  homeSensorId?: string | null;
+  homingDirection?: number;
+  homingSpeed?: number;
+  homeSensorPinActiveState?: number; // e.g. 0 for LOW, 1 for HIGH
+  homePositionOffset?: number;
+  isHoming?: boolean; // Runtime state, but can be part of config if needed
+  pullMode?: number;
+  debounceMs?: number;
 }
 
 /**
@@ -128,3 +138,65 @@ export interface DeviceDisplay {
 }
 
 // --- END NEW SEQUENCE RECORDER TYPES ---
+
+export interface BaseComponentConfig {
+  id: string;
+  name: string;
+}
+
+export type PinType = "digital" | "analog" | "pwm";
+export type PinMode = "input" | "output";
+// Assuming 0: NONE, 1: PULL_UP, 2: PULL_DOWN based on IOPinCard state and C++ enum order
+export type PullMode = 0 | 1 | 2;
+
+export interface IoPinComponentConfig extends BaseComponentConfig {
+  componentType: "IoPin";
+  pin: number;
+  pinType: PinType;
+  mode: PinMode;
+  pullMode?: PullMode; // Default should be 0 (NONE) in firmware/handler
+  debounceMs?: number; // Default should be 0 in firmware/handler
+  initialValue?: number; // For outputs; for inputs, it might be last known or not part of config
+}
+
+export interface ServoComponentConfig extends BaseComponentConfig {
+  componentType: "Servo";
+  pin: number;
+  minAngle?: number; // Degrees
+  maxAngle?: number; // Degrees
+  minPulseWidth?: number; // Microseconds, corresponds to firmware
+  maxPulseWidth?: number; // Microseconds, corresponds to firmware
+  speed?: number; // Speed (e.g., 1-100, or firmware specific units)
+  initialAngle?: number; // Optional: angle to set on configuration load
+  presets?: number[]; // Array of preset angles
+}
+
+export interface StepperComponentConfig extends BaseComponentConfig {
+  componentType: "Stepper";
+  pulPin: number;
+  dirPin: number;
+  enaPin?: number; // Optional enable pin
+  maxSpeed?: number; // Steps per second
+  acceleration?: number; // Steps/sec^2
+  stepsPerInch?: number;
+  minPosition?: number; // In steps
+  maxPosition?: number; // In steps
+
+  // Homing Configuration
+  homeSensorId?: string | null; // ID of an IoPin component used as a sensor
+  homingDirection?: -1 | 1; // Stepper movement direction for homing
+  homingSpeed?: number; // Speed for homing
+  homeSensorPinActiveState?: 0 | 1; // Active state of the home sensor (LOW or HIGH)
+  homePositionOffset?: number; // Position to set after homing (offset from zero in steps)
+
+  // Jog settings from original ConfiguredComponent
+  jogUnit?: "steps" | "inches";
+  jogAmount?: number; // For steps if jogUnit is steps
+  jogAmountInches?: number; // For inches if jogUnit is inches
+}
+
+// Discriminated union for any component configuration
+export type AnyComponentConfig =
+  | IoPinComponentConfig
+  | ServoComponentConfig
+  | StepperComponentConfig;

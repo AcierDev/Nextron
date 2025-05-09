@@ -198,7 +198,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       ledcWrite(pinToWrite->pin % 16, value);
     } else if (type == "analog") {  // ESP32 DAC
       if (pinToWrite->pin == 25 || pinToWrite->pin == 26) {
-        dacWrite(pinToWrite->pin, constrain(value, 0, 255));
+        // dacWrite(pinToWrite->pin, constrain(value, 0, 255));
       } else {
         client->text(F("ERROR: Pin does not support analog output (DAC)"));
         return;

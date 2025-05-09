@@ -32,7 +32,7 @@ async function handleGetConfigs() {
           },
         }
       )
-      .sort({ name: 1 })
+      .sort({ updatedAt: -1 })
       .toArray();
     console.log("[Main:handleGetConfigs] Fetched:", configs.length, "configs");
     // Important: Convert ObjectId to string for IPC serialization
@@ -166,6 +166,11 @@ async function handleUpdateConfig(
   try {
     const collection = await getConfigurationsCollection();
 
+    console.log(
+      "[Main:handleUpdateConfig] Update payload:",
+      JSON.stringify(updatePayload, null, 2)
+    );
+
     // Construct the $set object dynamically from the payload
     const fieldsToUpdate: any = {};
     for (const key in updatePayload) {
@@ -217,11 +222,6 @@ async function handleUpdateConfig(
     if (updateResult.matchedCount === 0) {
       throw new Error("Configuration not found");
     }
-
-    console.log(
-      `[Main:handleUpdateConfig] Updated config ID: ${configId} with payload:`,
-      fieldsToUpdate
-    );
 
     // Fetch and return the updated document
     const updatedDoc = await collection.findOne({
