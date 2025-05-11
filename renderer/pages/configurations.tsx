@@ -42,6 +42,7 @@ import {
   RotateCw,
   Info,
   Copy,
+  ArrowLeft,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
@@ -434,19 +435,29 @@ export default function ConfigurationsPage() {
             </p>
           </div>
 
-          <Button
-            className="flex items-center gap-2 bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 rounded-lg shadow-md hover:shadow-lg transition-all"
-            onClick={() => {
-              setNewConfigName("");
-              setNewConfigDescription("");
-              setErrorMessage(null);
-              setIsNewConfigOpen(true);
-            }}
-            disabled={isProcessing || isDuplicating}
-          >
-            <PlusCircle className="h-4 w-4" />
-            New Configuration
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => router.push("/firmware-setup")}
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Setup
+            </Button>
+            <Button
+              className="flex items-center gap-2 bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 rounded-lg shadow-md hover:shadow-lg transition-all"
+              onClick={() => {
+                setNewConfigName("");
+                setNewConfigDescription("");
+                setErrorMessage(null);
+                setIsNewConfigOpen(true);
+              }}
+              disabled={isProcessing || isDuplicating}
+            >
+              <PlusCircle className="h-4 w-4" />
+              New Configuration
+            </Button>
+          </div>
         </header>
 
         <AnimatePresence>

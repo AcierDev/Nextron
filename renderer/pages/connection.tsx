@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/router";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,159 +12,109 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { motion } from "framer-motion";
-
-// Define connection status type
-type ConnectionStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "error"
-  | "fetchingIp";
+import useWSStore from "@/lib/stores/wsStore"; // Import the store
 
 export default function ConnectionPage() {
   const router = useRouter();
 
-  // Connection state
-  const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>("fetchingIp");
-  const [lastIpOctet, setLastIpOctet] = useState("");
-  const [isFetchingIp, setIsFetchingIp] = useState(true);
-  const [isConnectionDialogOpen, setIsConnectionDialogOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  // Get state and actions from WSStore
+  const connectionStatus = useWSStore((state) => state.connectionStatus);
+  const lastIpOctetFromStore = useWSStore((state) => state.lastIpOctet);
+  const errorMessage = useWSStore((state) => state.errorMessage);
+  const infoMessage = useWSStore((state) => state.infoMessage);
+  const {
+    connectToDevice,
+    setErrorMessage: setWSErrorMessage,
+    setInfoMessage: setWSInfoMessage,
+  } = useWSStore.getState();
 
-  // Effect for message timeouts
+  // Local state for the dialog input and visibility
+  const [isConnectionDialogOpen, setIsConnectionDialogOpen] = useState(false);
+  const [dialogInputOctet, setDialogInputOctet] = useState(""); // For the IP input field in the dialog
+
+  // Local state for the IP auto-detection flow, distinct from WebSocket connection status
+  type IpFetchingStatus = "idle" | "fetching" | "error" | "success";
+  const [ipFetchingStatus, setIpFetchingStatus] =
+    useState<IpFetchingStatus>("idle");
+
+  // Effect for clearing messages from the wsStore after a timeout
   useEffect(() => {
     let errorTimer: NodeJS.Timeout | null = null;
     let infoTimer: NodeJS.Timeout | null = null;
 
     if (errorMessage) {
-      errorTimer = setTimeout(() => setErrorMessage(null), 5000);
+      errorTimer = setTimeout(() => setWSErrorMessage(null), 5000);
     }
     if (infoMessage) {
-      infoTimer = setTimeout(() => setInfoMessage(null), 3000);
+      // Info messages related to connection process might be better managed by the process itself
+      // For now, clear them after a slightly shorter duration if they are not errors.
+      infoTimer = setTimeout(() => setWSInfoMessage(null), 4000);
     }
 
     return () => {
       if (errorTimer) clearTimeout(errorTimer);
       if (infoTimer) clearTimeout(infoTimer);
     };
-  }, [errorMessage, infoMessage]);
+  }, [errorMessage, infoMessage, setWSErrorMessage, setWSInfoMessage]);
 
-  // Handle connecting to the ESP32 device
-  const handleConnect = useCallback(
-    async (lastOctet: string) => {
-      // Prevent starting a new connection if already connecting
-      if (connectionStatus === "connecting") {
-        console.log("Already connecting to a device. Ignoring request.");
-        return;
-      }
+  // Handles the connection attempt when the user submits the IP from the dialog
+  const handleDialogConnect = useCallback(async () => {
+    if (connectionStatus === "connecting") {
+      console.log(
+        "[ConnectionPage] Already attempting to connect. Ignoring request."
+      );
+      return;
+    }
 
-      const octetNum = parseInt(lastOctet, 10);
-      if (isNaN(octetNum) || octetNum < 0 || octetNum > 255) {
-        setConnectionStatus("error");
-        setErrorMessage("Invalid IP address ending (must be 0-255)");
-        setInfoMessage(null);
-        setIsFetchingIp(false);
-        return;
-      }
+    const octetNum = parseInt(dialogInputOctet, 10);
+    if (isNaN(octetNum) || octetNum < 0 || octetNum > 255) {
+      setWSErrorMessage("Invalid IP address ending (must be 0-255)");
+      return;
+    }
 
-      setConnectionStatus("connecting");
-      setErrorMessage(null);
-      setInfoMessage(`Connecting to 192.168.1.${lastOctet}...`);
+    setIsConnectionDialogOpen(false); // Close dialog before attempting connection
+    await connectToDevice(dialogInputOctet); // connectToDevice in wsStore handles setting messages
+    // Navigation and further UI updates will be driven by wsStore state changes
+  }, [connectToDevice, dialogInputOctet, setWSErrorMessage, connectionStatus]);
 
-      try {
-        // Use the main process to establish the WebSocket connection
-        const result = await window.ipc.invoke("connect-websocket", lastOctet);
-
-        if (result.success) {
-          console.log("Connection successful:", result);
-          setConnectionStatus("connected");
-          setErrorMessage(null);
-          setInfoMessage(
-            "Connected to board! Redirecting to configurations..."
-          );
-          setIsFetchingIp(false);
-
-          // No need to store connection status separately as it's managed by the main process
-
-          // Set up event listener for WebSocket status changes
-          const wsStatusListener = window.ipc.on("ws-status", (data: any) => {
-            console.log("WebSocket status update:", data);
-
-            if (data.status === "disconnected" || data.status === "error") {
-              setConnectionStatus("error");
-              setErrorMessage(
-                data.status === "error"
-                  ? `Connection error: ${data.error || "Unknown error"}`
-                  : "Connection closed. Device may have disconnected."
-              );
-            }
-          });
-
-          // Navigate to configurations page
-          router.push("/configurations");
-
-          // Return function to clean up event listener
-          return () => {
-            if (wsStatusListener) {
-              wsStatusListener();
-            }
-          };
-        } else {
-          console.error("Failed to connect:", result.error);
-          setConnectionStatus("error");
-          setErrorMessage(`Connection failed: ${result.error}`);
-          setInfoMessage(null);
-        }
-      } catch (error) {
-        console.error("Error during connection:", error);
-        setConnectionStatus("error");
-        setErrorMessage(`Connection error: ${(error as Error).message}`);
-        setInfoMessage(null);
-      }
-    },
-    [connectionStatus, router]
-  );
-
-  // Add IP detection effect
+  // Effect for automatic IP detection logic
   useEffect(() => {
-    let cleanupListener: (() => void) | null = null;
-    let ipDetectionTimeout: NodeJS.Timeout | null = null;
+    let cleanupIpListener: (() => void) | null = null;
+    let ipDetectionTimeoutId: NodeJS.Timeout | null = null;
 
-    if (connectionStatus === "fetchingIp") {
-      console.log("Setting up IPC listener for IP detection...");
+    if (ipFetchingStatus === "fetching") {
+      console.log("[ConnectionPage] Starting IP detection...");
+      setWSInfoMessage("Attempting automatic IP detection...");
 
-      // Set timeout for IP detection after 3 seconds
-      ipDetectionTimeout = setTimeout(() => {
-        if (connectionStatus === "fetchingIp") {
+      ipDetectionTimeoutId = setTimeout(() => {
+        if (ipFetchingStatus === "fetching") {
           console.log(
-            "IP detection timed out after 3 seconds, opening manual input dialog"
+            "[ConnectionPage] IP detection timed out. Opening manual input dialog."
           );
-          setIsFetchingIp(false);
-          setErrorMessage("IP detection timed out. Please enter IP manually.");
-          setConnectionStatus("idle"); // Set to idle to prevent reconnect
-          // Open manual IP dialog
+          setWSErrorMessage(
+            "IP detection timed out. Please enter IP manually."
+          );
+          setIpFetchingStatus("error"); // Update local IP fetching status
           setIsConnectionDialogOpen(true);
+          setWSInfoMessage(null); // Clear the "Attempting..." message
         }
-      }, 3000);
+      }, 5000); // Increased timeout for IP detection
 
-      const handleIpUpdate = (data: { ip?: string; error?: string }) => {
-        console.log("IPC: IP Update Received:", data);
+      const handleIpUpdate = async (data: { ip?: string; error?: string }) => {
+        console.log("[ConnectionPage] IPC 'ip-update' received:", data);
 
-        if (connectionStatus !== "fetchingIp") {
+        if (ipFetchingStatus !== "fetching") {
           console.log(
-            "IPC: Ignoring IP update, no longer in fetchingIp state."
+            "[ConnectionPage] Ignoring IP update, no longer in fetchingIp state."
           );
           return;
         }
 
-        // Clear the timeout since we got a response
-        if (ipDetectionTimeout) {
-          clearTimeout(ipDetectionTimeout);
-          ipDetectionTimeout = null;
+        if (ipDetectionTimeoutId) {
+          clearTimeout(ipDetectionTimeoutId);
+          ipDetectionTimeoutId = null;
         }
 
         if (data.ip) {
@@ -174,78 +124,110 @@ export default function ConnectionPage() {
             const octetNum = parseInt(octet, 10);
             if (!isNaN(octetNum) && octetNum >= 0 && octetNum <= 255) {
               console.log(
-                `IPC: Extracted last octet: ${octet}. Attempting connection.`
+                `[ConnectionPage] Extracted last octet: ${octet}. Attempting WS connection.`
               );
-              setLastIpOctet(octet);
-              handleConnect(octet);
+              setIpFetchingStatus("success"); // IP found successfully
+              setDialogInputOctet(octet); // Pre-fill for dialog or if needed elsewhere
+              await connectToDevice(octet); // This will update wsStore's connectionStatus
             } else {
-              console.error("IPC: Invalid IP format received:", data.ip);
-              setErrorMessage("Received invalid IP format from device.");
-              setConnectionStatus("error");
-              setIsFetchingIp(false);
+              console.error(
+                "[ConnectionPage] Invalid IP format received:",
+                data.ip
+              );
+              setWSErrorMessage("Received invalid IP format from device.");
+              setIpFetchingStatus("error");
             }
           } else {
             console.error(
-              "IPC: IP received doesn't start with 192.168.1.:",
+              "[ConnectionPage] IP received doesn't start with 192.168.1.:",
               data.ip
             );
-            setErrorMessage("Received unexpected IP format from device.");
-            setConnectionStatus("error");
-            setIsFetchingIp(false);
+            setWSErrorMessage("Received unexpected IP format from device.");
+            setIpFetchingStatus("error");
           }
         } else if (data.error) {
-          console.error("IPC: IP detection error:", data.error);
-          setErrorMessage(
+          console.error(
+            "[ConnectionPage] IP detection error from main process:",
+            data.error
+          );
+          setWSErrorMessage(
             `IP detection failed: ${data.error}. Try manual connection.`
           );
-          setConnectionStatus("error");
-          setIsFetchingIp(false);
+          setIpFetchingStatus("error");
+        }
+
+        // If IP detection ultimately failed, ensure dialog is open
+        if (ipFetchingStatus === "error" && !isConnectionDialogOpen) {
+          setIsConnectionDialogOpen(true);
         }
       };
 
-      cleanupListener = window.ipc.on("ip-update", handleIpUpdate);
+      cleanupIpListener = window.ipc.on("ip-update", handleIpUpdate);
       window.ipc.send("start-ip-watch", {});
     }
 
     return () => {
-      if (cleanupListener) {
-        console.log("Cleaning up IPC IP detection listener.");
-        cleanupListener();
+      if (cleanupIpListener) {
+        console.log("[ConnectionPage] Cleaning up IPC IP detection listener.");
+        cleanupIpListener();
       }
-      if (ipDetectionTimeout) {
-        clearTimeout(ipDetectionTimeout);
+      if (ipDetectionTimeoutId) {
+        clearTimeout(ipDetectionTimeoutId);
       }
-      if (connectionStatus === "fetchingIp") {
-        console.log("Stopping IP watch in main process (cleanup).");
+      // Stop IP watch if it was active and component is unmounting or IP fetching stops
+      if (ipFetchingStatus === "fetching" || cleanupIpListener) {
+        console.log(
+          "[ConnectionPage] Stopping IP watch in main process (cleanup)."
+        );
         window.ipc.send("stop-ip-watch", {});
       }
     };
-  }, [connectionStatus, handleConnect]);
+  }, [
+    ipFetchingStatus,
+    connectToDevice,
+    setWSErrorMessage,
+    setWSInfoMessage,
+    isConnectionDialogOpen,
+  ]);
 
-  // Check if we're already connected when the page loads
+  // Effect to handle navigation once wsStore indicates a successful connection
   useEffect(() => {
-    const checkExistingConnection = async () => {
-      try {
-        const connectionData = await window.ipc.invoke("get-connection-status");
+    if (connectionStatus === "connected") {
+      // setWSInfoMessage("Connected! Redirecting to configurations..."); // wsStore.connectToDevice sets this
+      const timer = setTimeout(() => {
+        router.push("/configurations");
+      }, 1500); // Delay for user to see the success message from wsStore
+      return () => clearTimeout(timer);
+    }
+  }, [connectionStatus, router, setWSInfoMessage]);
 
-        if (connectionData && connectionData.connected) {
-          console.log("Already connected:", connectionData);
-          setConnectionStatus("connected");
-          setLastIpOctet(connectionData.ipOctet || "");
-          setInfoMessage("Already connected to board. Redirecting...");
+  // Effect to initialize IP fetching if not already connected or attempting to connect
+  useEffect(() => {
+    if (connectionStatus === "idle" && ipFetchingStatus === "idle") {
+      setIpFetchingStatus("fetching");
+    } else if (connectionStatus === "connected") {
+      // If already connected (e.g. due to persisted session via wsStore init), redirect.
+      router.push("/configurations");
+    }
+  }, [connectionStatus, ipFetchingStatus, router]);
 
-          // Redirect to configurations page after a short delay
-          setTimeout(() => {
-            router.push("/configurations");
-          }, 1500);
-        }
-      } catch (err) {
-        console.error("Error checking connection status:", err);
-      }
-    };
+  // UI Action: Open the manual connection dialog
+  const openManualConnectDialog = () => {
+    if (ipFetchingStatus === "fetching") {
+      window.ipc.send("stop-ip-watch", {}); // Stop auto-detection if running
+    }
+    setIpFetchingStatus("idle");
+    setWSErrorMessage(null); // Clear previous errors before opening dialog
+    setIsConnectionDialogOpen(true);
+  };
 
-    checkExistingConnection();
-  }, [router]);
+  // UI Action: Retry auto-detection from the dialog
+  const tryAutoDetectAgain = () => {
+    setWSErrorMessage(null);
+    setWSInfoMessage(null);
+    setIsConnectionDialogOpen(false);
+    setIpFetchingStatus("fetching"); // Re-trigger IP auto-detection
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 flex flex-col items-center justify-center p-4">
@@ -257,7 +239,11 @@ export default function ConnectionPage() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => router.push("/configurations")}
+          onClick={() =>
+            router.push(
+              connectionStatus === "connected" ? "/configurations" : "/home"
+            )
+          }
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
           aria-label="Close"
         >
@@ -267,34 +253,36 @@ export default function ConnectionPage() {
           Connect to Board
         </h1>
         <p className="text-gray-500 dark:text-gray-400 text-center mb-8">
-          Connect to your Everwood CNC hardware first
+          {connectionStatus === "connected"
+            ? "Successfully connected!"
+            : "Connect to your Everwood CNC hardware"}
         </p>
 
-        {connectionStatus === "fetchingIp" && (
-          <div className="text-center py-6">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
-            <p className="text-gray-600 dark:text-gray-300 mb-4">
-              Attempting automatic IP detection...
-            </p>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsFetchingIp(false);
-                setErrorMessage(null);
-                setConnectionStatus("idle");
-                setIsConnectionDialogOpen(true);
-              }}
-            >
-              Enter IP Manually
-            </Button>
-          </div>
-        )}
+        {/* Display for IP Fetching State (local to this page) */}
+        {ipFetchingStatus === "fetching" &&
+          connectionStatus !== "connecting" &&
+          connectionStatus !== "connected" && (
+            <div className="text-center py-6">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">
+                {infoMessage || "Attempting automatic IP detection..."}{" "}
+                {/* Show store's info message */}
+              </p>
+              <Button variant="outline" onClick={openManualConnectDialog}>
+                Enter IP Manually
+              </Button>
+            </div>
+          )}
 
+        {/* Display for WebSocket Connection Status (from wsStore) */}
         {connectionStatus === "connecting" && (
           <div className="text-center py-6">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
             <p className="text-gray-600 dark:text-gray-300">
-              Connecting to 192.168.1.{lastIpOctet}...
+              {infoMessage ||
+                `Connecting to 192.168.1.${
+                  lastIpOctetFromStore || dialogInputOctet
+                }...`}
             </p>
           </div>
         )}
@@ -303,49 +291,36 @@ export default function ConnectionPage() {
           <div className="text-center py-6">
             <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 p-4 rounded-lg mb-6">
               <p className="font-medium">
-                Connected to board at 192.168.1.{lastIpOctet}
+                Connected to board at 192.168.1.{lastIpOctetFromStore}
               </p>
-              <p className="text-sm mt-1">Redirecting to configurations...</p>
+              <p className="text-sm mt-1">
+                {infoMessage || "Redirecting to configurations..."}
+              </p>
             </div>
           </div>
         )}
 
-        {connectionStatus === "error" && (
+        {/* Display for Error Status (from wsStore) or Idle (post-IP fetch attempt) prompting action */}
+        {(connectionStatus === "error" ||
+          (connectionStatus === "idle" && ipFetchingStatus !== "fetching")) && (
           <div className="text-center py-4">
-            <div className="bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 p-4 rounded-lg mb-4">
-              <p className="font-medium">
-                {errorMessage || "Connection error"}
-              </p>
-            </div>
-            <Button
-              onClick={() => setIsConnectionDialogOpen(true)}
-              className="mt-4"
-            >
-              Try Again
+            {errorMessage && (
+              <div className="bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 p-4 rounded-lg mb-4">
+                <p className="font-medium">{errorMessage}</p>
+              </div>
+            )}
+            <Button onClick={openManualConnectDialog} className="mt-4">
+              {connectionStatus === "error"
+                ? "Try Manual Connection"
+                : "Connect to Board"}
             </Button>
           </div>
         )}
 
-        {connectionStatus === "idle" && (
-          <Button
-            onClick={() => setIsConnectionDialogOpen(true)}
-            className="w-full"
-          >
-            Connect to Board
-          </Button>
-        )}
-
-        {errorMessage && connectionStatus !== "error" && (
-          <p className="text-red-500 dark:text-red-400 text-sm mt-4 text-center">
-            {errorMessage}
-          </p>
-        )}
-
-        {infoMessage && (
-          <p className="text-blue-500 dark:text-blue-400 text-sm mt-4 text-center">
-            {infoMessage}
-          </p>
-        )}
+        {/* Fallback for general info/error messages from store if not covered by specific status blocks */}
+        {/* These are primarily for the timeout effect to clear them from the store */}
+        {/* errorMessage from store is already shown in the 'error' block above */}
+        {/* infoMessage from store is shown in various status blocks */}
       </motion.div>
 
       <Dialog
@@ -355,12 +330,12 @@ export default function ConnectionPage() {
         <DialogContent className="sm:max-w-md bg-white dark:bg-gray-800">
           <DialogHeader>
             <DialogTitle className="text-gray-900 dark:text-white">
-              Connect to Board
+              Manual Connection
             </DialogTitle>
           </DialogHeader>
           <div className="py-4">
             <Label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Board IP Address
+              Board IP Address (Last Octet)
             </Label>
             <div className="flex items-center gap-2">
               <span className="text-gray-500 dark:text-gray-400 font-mono pt-2">
@@ -371,55 +346,66 @@ export default function ConnectionPage() {
                 inputMode="numeric"
                 pattern="[0-9]*"
                 maxLength={3}
-                value={lastIpOctet}
+                value={dialogInputOctet} // Uses local state for dialog input
                 onChange={(e) => {
                   const value = e.target.value;
+                  // Allow empty, or numbers from 0 up to 3 digits
                   if (/^\d{0,3}$/.test(value)) {
-                    const num = parseInt(value, 10);
-                    if (value === "" || (num >= 0 && num <= 255)) {
-                      setLastIpOctet(value);
+                    if (value === "") {
+                      setDialogInputOctet(value);
+                    } else {
+                      const num = parseInt(value, 10);
+                      if (num >= 0 && num <= 255) {
+                        setDialogInputOctet(value);
+                      } else if (num > 255) {
+                        // If user types something > 255, cap it or show error immediately
+                        // For now, just don't update if > 255 and not 3 digits yet
+                        // or set to 255 if they typed e.g. 300
+                        setDialogInputOctet("255"); // Cap at 255
+                      }
                     }
                   }
                 }}
                 onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    lastIpOctet &&
-                    parseInt(lastIpOctet, 10) <= 255
-                  ) {
-                    handleConnect(lastIpOctet);
-                    setIsConnectionDialogOpen(false);
+                  if (e.key === "Enter" && dialogInputOctet) {
+                    const octetNum = parseInt(dialogInputOctet, 10);
+                    if (!isNaN(octetNum) && octetNum >= 0 && octetNum <= 255) {
+                      handleDialogConnect();
+                    } else {
+                      setWSErrorMessage("Enter a valid IP octet (0-255).");
+                    }
                   }
                 }}
                 className="flex-1 w-20 text-center font-mono"
                 placeholder="XXX"
               />
             </div>
+            {/* Inline validation for dialog input octet */}
+            {dialogInputOctet &&
+              (parseInt(dialogInputOctet, 10) > 255 ||
+                parseInt(dialogInputOctet, 10) < 0 ||
+                (isNaN(parseInt(dialogInputOctet, 10)) &&
+                  dialogInputOctet !== "")) && (
+                <p className="text-red-500 text-xs mt-1">
+                  Must be a number between 0-255.
+                </p>
+              )}
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setConnectionStatus("fetchingIp");
-                setIsFetchingIp(true);
-                setErrorMessage(null);
-                setIsConnectionDialogOpen(false);
-              }}
-            >
+            <Button variant="outline" onClick={tryAutoDetectAgain}>
               Try Auto-Detect
             </Button>
             <Button
-              onClick={() => {
-                if (lastIpOctet && parseInt(lastIpOctet, 10) <= 255) {
-                  handleConnect(lastIpOctet);
-                  setIsConnectionDialogOpen(false);
-                } else {
-                  setErrorMessage("Please enter a valid IP ending (0-255)");
-                }
-              }}
-              disabled={!lastIpOctet || parseInt(lastIpOctet, 10) > 255}
+              onClick={handleDialogConnect}
+              disabled={
+                !dialogInputOctet ||
+                parseInt(dialogInputOctet, 10) > 255 ||
+                parseInt(dialogInputOctet, 10) < 0 ||
+                isNaN(parseInt(dialogInputOctet, 10)) ||
+                connectionStatus === "connecting"
+              }
             >
-              Connect
+              {connectionStatus === "connecting" ? "Connecting..." : "Connect"}
             </Button>
           </DialogFooter>
         </DialogContent>

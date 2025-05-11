@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { PlusCircle, ArrowLeft, Save, Loader2, PlaySquare } from "lucide-react";
@@ -81,6 +81,9 @@ export default function Dashboard() {
   // Reference to WebSocket for cleanup
   const ws = useRef<WebSocket | null>(null);
 
+  // Reference to track if we've already synced with the device
+  const hasSyncedRef = useRef<boolean>(false);
+
   // Get the effective error and info messages to display
   const errorMessage = configErrorMessage || wsErrorMessage;
   const infoMessage = configInfoMessage || wsInfoMessage;
@@ -96,8 +99,6 @@ export default function Dashboard() {
       return;
     }
     loadConfiguration(configId);
-
-    // Optional: Close WS connection if changing config? Handled in main process perhaps?
   }, [
     configId,
     router,
@@ -216,12 +217,14 @@ export default function Dashboard() {
           setWSConnectionStatus("connected");
           setWSLastIpOctet(connectionData.ipOctet || "");
           window.ipc.invoke("keep-connection-alive");
-          // Only sync if the config is loaded and we just established/confirmed connection
-          if (currentConfig.isLoaded) {
+
+          // Only sync if the config is loaded and we haven't synced yet
+          if (currentConfig.isLoaded && !hasSyncedRef.current) {
             console.log(
               "Dashboard: Config loaded and connection active, performing initial sync."
             );
             syncConfigWithDevice(hardwareConfig);
+            hasSyncedRef.current = true;
           }
         } else if (connectionData && connectionData.stale) {
           setWSConnectionStatus("error");
@@ -259,13 +262,9 @@ export default function Dashboard() {
       if (wsMessageListener) wsMessageListener();
       if (wsStatusListener) wsStatusListener();
       clearInterval(keepAliveInterval);
-      window.ipc
-        .invoke("dashboard-unloaded")
-        .catch((err) => console.error("Error notifying main of unload:", err));
     };
   }, [
     router,
-    currentConfig.isLoaded, // Sync only when config is first loaded
     connectionStatus, // Re-evaluate if connection status changes
     syncConfigWithDevice,
     updateComponentState,
@@ -643,6 +642,15 @@ export default function Dashboard() {
       `[Dashboard] Updating hardware config for pin ${pinId}: pullMode=${pullMode}, debounceMs=${debounceMs}`
     );
 
+    // Find the pin in hardware config
+    const pin = hardwareConfig.pins.find((p) => p.id === pinId);
+    if (!pin) {
+      console.error(
+        `[Dashboard] Pin with ID ${pinId} not found in hardware config`
+      );
+      return;
+    }
+
     // Find and update the pin in the hardware config
     const updatedPins = hardwareConfig.pins.map((pin) => {
       if (pin.id === pinId) {
@@ -657,6 +665,31 @@ export default function Dashboard() {
 
     // Update the hardware config state
     updateHardwareConfig({ pins: updatedPins });
+
+    // Now send the configuration to the device
+    const configUpdatePayload = {
+      id: pinId,
+      name: pin.name,
+      pin: pin.pins[0],
+      mode: pin.type.includes("input") ? "input" : "output",
+      pinType: pin.type.startsWith("digital")
+        ? "digital"
+        : pin.type.startsWith("analog")
+        ? "analog"
+        : "pwm",
+      pullMode,
+      debounceMs,
+    };
+
+    console.log(
+      `[Dashboard] Sending pin configure update for ${pinId}:`,
+      configUpdatePayload
+    );
+    sendMessage({
+      action: "configure",
+      componentGroup: "pins",
+      config: configUpdatePayload,
+    });
   };
 
   // Handle saving the configuration

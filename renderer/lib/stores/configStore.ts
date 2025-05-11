@@ -5,7 +5,6 @@ import {
   FullConfigDataIPC,
   SavedConfigDocument,
 } from "../../../common/types";
-import useComponentStore from "./componentStore";
 
 // Define the initial empty hardware config
 const initialHardwareConfig: HardwareConfig = {

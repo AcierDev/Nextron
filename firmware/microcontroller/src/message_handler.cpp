@@ -120,6 +120,10 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     PinPullMode pullMode = static_cast<PinPullMode>(config["pullMode"] | 0);
     uint16_t debounceMs = config["debounceMs"] | 0;
 
+    Serial.printf("Configuring pin %s: %s, %d, %s, %s, %d, %d\n", id.c_str(),
+                  name.c_str(), pin, mode.c_str(), pinType.c_str(), pullMode,
+                  debounceMs);
+
     if (id.isEmpty() || name.isEmpty()) {
       client->text(F("ERROR: Missing required config fields for pin"));
       return;

@@ -17,6 +17,7 @@ import {
   AlertCircle,
   ChevronRight,
   Wifi,
+  RotateCw,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
@@ -29,51 +30,56 @@ export default function FirmwareSetupPage() {
   const [uploadStage, setUploadStage] = useState("preparing"); // preparing, connecting, erasing, uploading, verifying, completed
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadLog, setUploadLog] = useState([]);
+  const [isRefreshingPorts, setIsRefreshingPorts] = useState(false);
+
+  // Function to fetch available serial ports
+  const fetchPorts = async () => {
+    setIsRefreshingPorts(true);
+    try {
+      // @ts-ignore - Global electron object
+      const ports = await window.electron.getSerialPorts();
+      console.log("ports", ports);
+
+      // Filter out debug console and Bluetooth ports that aren't ESP32 devices
+      const filteredPorts = ports.filter((port) => {
+        // Skip debug console and Bluetooth-Incoming-Port
+        if (
+          port.path.includes("debug-console") ||
+          port.path.includes("Bluetooth-Incoming-Port")
+        ) {
+          return false;
+        }
+
+        // Look for likely ESP32 indicators
+        const isLikelyESP32 =
+          (port.manufacturer &&
+            (port.manufacturer.includes("Silicon") ||
+              port.manufacturer.includes("Espressif") ||
+              port.manufacturer.includes("CP210"))) ||
+          port.path.includes("usbserial") ||
+          port.path.includes("ttyUSB") ||
+          port.path.includes("COM");
+
+        return isLikelyESP32;
+      });
+
+      setSerialPorts(filteredPorts);
+      if (filteredPorts.length > 0) {
+        setSelectedPort(filteredPorts[0].path);
+      }
+    } catch (error) {
+      console.error("Failed to get serial ports:", error);
+      setMessage(
+        "Failed to detect serial ports. Make sure you have the necessary drivers installed."
+      );
+      setStatus("error");
+    } finally {
+      setIsRefreshingPorts(false);
+    }
+  };
 
   // Fetch available serial ports when the component mounts
   useEffect(() => {
-    const fetchPorts = async () => {
-      try {
-        // @ts-ignore - Global electron object
-        const ports = await window.electron.getSerialPorts();
-        console.log("ports", ports);
-
-        // Filter out debug console and Bluetooth ports that aren't ESP32 devices
-        const filteredPorts = ports.filter((port) => {
-          // Skip debug console and Bluetooth-Incoming-Port
-          if (
-            port.path.includes("debug-console") ||
-            port.path.includes("Bluetooth-Incoming-Port")
-          ) {
-            return false;
-          }
-
-          // Look for likely ESP32 indicators
-          const isLikelyESP32 =
-            (port.manufacturer &&
-              (port.manufacturer.includes("Silicon") ||
-                port.manufacturer.includes("Espressif") ||
-                port.manufacturer.includes("CP210"))) ||
-            port.path.includes("usbserial") ||
-            port.path.includes("ttyUSB") ||
-            port.path.includes("COM");
-
-          return isLikelyESP32;
-        });
-
-        setSerialPorts(filteredPorts);
-        if (filteredPorts.length > 0) {
-          setSelectedPort(filteredPorts[0].path);
-        }
-      } catch (error) {
-        console.error("Failed to get serial ports:", error);
-        setMessage(
-          "Failed to detect serial ports. Make sure you have the necessary drivers installed."
-        );
-        setStatus("error");
-      }
-    };
-
     fetchPorts();
   }, []);
 
@@ -353,22 +359,47 @@ export default function FirmwareSetupPage() {
     } catch (error) {
       console.error("Firmware upload failed:", error);
 
+      // Extract error message if available
+      const errorDetails = error.error || "";
+
       // Handle specific errors with more helpful messages
       if (
-        error.error &&
-        (error.error.includes("spawn pio ENOENT") ||
-          error.error.includes("Cannot find") ||
-          error.error.includes("not found"))
+        errorDetails.includes("spawn pio ENOENT") ||
+        errorDetails.includes("Cannot find") ||
+        errorDetails.includes("not found")
       ) {
+        // PlatformIO installation issues
         setMessage(
           "PlatformIO (pio) command not found. Please make sure PlatformIO is installed and in your PATH. " +
             "Run 'pip install platformio' to install it."
         );
-      } else {
+      } else if (
+        errorDetails.includes("Could not open") &&
+        errorDetails.includes("the port doesn't exist")
+      ) {
+        // Port doesn't exist error
         setMessage(
-          error.error ||
-            "Failed to upload firmware. Please make sure no other processes are using the serial port and try again."
+          `The serial port ${selectedPort} is not available. The device may have been disconnected. ` +
+            "Please check the connection and try again."
         );
+      } else if (
+        errorDetails.includes("Access denied") ||
+        errorDetails.includes("Permission denied")
+      ) {
+        // Permission issues
+        setMessage(
+          "Access to the serial port was denied. Please make sure no other programs " +
+            "are using the port and you have the necessary permissions."
+        );
+      } else if (errorDetails.includes("failed to connect")) {
+        // Connection issues
+        setMessage(
+          "Failed to connect to the device. Please make sure the device is in upload mode " +
+            "and try again. For ESP32, try holding the BOOT button while uploading."
+        );
+      } else {
+        // Generic error fallback
+        setMessage("Failed to upload firmware. " + errorDetails);
       }
 
       setStatus("error");
@@ -581,9 +612,24 @@ export default function FirmwareSetupPage() {
         <div className="space-y-6">
           {serialPorts.length > 0 && status === "idle" ? (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Select Device
-              </label>
+              <div className="flex justify-between items-center">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Select Device
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={fetchPorts}
+                  disabled={isRefreshingPorts}
+                  className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                >
+                  {isRefreshingPorts ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
               <Select
                 value={selectedPort}
                 onValueChange={setSelectedPort}
@@ -604,12 +650,27 @@ export default function FirmwareSetupPage() {
             </div>
           ) : status === "idle" ? (
             <div className="py-4 px-5 bg-amber-50/50 dark:bg-amber-900/20 rounded-lg text-amber-800 dark:text-amber-300 text-sm backdrop-blur-sm">
-              <div className="flex items-start">
-                <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-amber-500 dark:text-amber-400" />
-                <span>
-                  No serial ports detected. Please connect your ESP32 and
-                  refresh.
-                </span>
+              <div className="flex items-start justify-between">
+                <div className="flex items-start">
+                  <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-amber-500 dark:text-amber-400" />
+                  <span>
+                    No serial ports detected. Please connect your ESP32 and
+                    refresh.
+                  </span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={fetchPorts}
+                  disabled={isRefreshingPorts}
+                  className="text-amber-600 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300 ml-4 flex-shrink-0"
+                >
+                  {isRefreshingPorts ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
             </div>
           ) : null}
