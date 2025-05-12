@@ -239,208 +239,189 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   const char *action = doc["action"];
   String id = doc["id"];  // Common for most servo actions
 
-  ServoConfig *servo = findServoById(id);
-
   if (strcmp(action, "configure") == 0) {
     JsonObject config = doc["config"];
-    String cfg_id = config["id"];  // ID from config object
+    String cfg_id = config["id"];
     String name = config["name"];
     uint8_t pin = config["pin"];
     int minAngle = config["minAngle"] | 0;
     int maxAngle = config["maxAngle"] | 180;
     int minPulseWidth = config["minPulseWidth"] | 500;
     int maxPulseWidth = config["maxPulseWidth"] | 2400;
-    bool hasSpeedConfig = config.containsKey("speed");
-    int speedVal = hasSpeedConfig ? config["speed"].as<int>() : 100;
+    int initialAngle = config["initialAngle"] | 90;
 
     if (cfg_id.isEmpty() || name.isEmpty() || pin == 0) {
-      client->text(
-          F("ERROR: Missing required servo config fields (id, name, pin)"));
+      client->text(F("ERROR: Missing servo config fields (id, name, pin)"));
       return;
     }
 
-    ServoConfig *existingServo =
-        findServoById(cfg_id);  // Use ID from config for finding/creating
+    ServoConfig *existingServo = findServoById(cfg_id);
 
     if (existingServo) {
-      Serial.printf("Reconfiguring servo %s (Pin %d)\n", cfg_id.c_str(), pin);
-      if (existingServo->pin != pin || !existingServo->isAttached) {
-        detachServoPWM(*existingServo);
-        existingServo->pin = pin;
-      }
+      // Clean up existing servo before reconfiguring
+      cleanupServo(*existingServo);
+
+      // Update configuration
       existingServo->name = name;
+      existingServo->pin = pin;
       existingServo->minAngle = minAngle;
       existingServo->maxAngle = maxAngle;
       existingServo->minPulseWidth = minPulseWidth;
       existingServo->maxPulseWidth = maxPulseWidth;
-      if (hasSpeedConfig) {
-        existingServo->speed = constrain(speedVal, 1, 100);
-      }
-      existingServo->isActionPending = false;  // Cancel any pending timed move
-      existingServo->calculatedMoveDuration = 0;
-      attachServoPWM(*existingServo);
-      // Update current pulse width based on new angle/PWM settings
-      setServoPulseWidth(
-          *existingServo,
-          angleToPulseWidth(*existingServo, existingServo->currentAngle));
-    } else {
-      Serial.printf("Adding new servo %s (Pin %d)\n", cfg_id.c_str(), pin);
-      ServoConfig newConfig;
-      newConfig.id = cfg_id;
-      newConfig.name = name;
-      newConfig.pin = pin;
-      newConfig.minAngle = minAngle;
-      newConfig.maxAngle = maxAngle;
-      newConfig.minPulseWidth = minPulseWidth;
-      newConfig.maxPulseWidth = maxPulseWidth;
-      newConfig.speed = constrain(speedVal, 1, 100);
-      newConfig.currentAngle = 90;  // Sensible default
-      newConfig.currentPulseWidth =
-          angleToPulseWidth(newConfig, newConfig.currentAngle);
-      newConfig.targetAngle = newConfig.currentAngle;
-      newConfig.targetPulseWidth = newConfig.currentPulseWidth;
+      existingServo->currentAngle = initialAngle;
 
-      attachServoPWM(newConfig);
-      configuredServos.push_back(newConfig);
-      existingServo = &configuredServos.back();  // Get pointer to the new servo
+      // Initialize with new configuration
+      initializeServo(*existingServo);
+    } else {
+      ServoConfig newServo;
+      newServo.id = cfg_id;
+      newServo.name = name;
+      newServo.pin = pin;
+      newServo.minAngle = minAngle;
+      newServo.maxAngle = maxAngle;
+      newServo.minPulseWidth = minPulseWidth;
+      newServo.maxPulseWidth = maxPulseWidth;
+      newServo.currentAngle = initialAngle;
+      newServo.isAttached = false;
+
+      // Initialize the servo
+      initializeServo(newServo);
+      configuredServos.push_back(newServo);
     }
 
+    // Send success response
     StaticJsonDocument<256> response;
     response["status"] = F("OK");
     response["message"] = F("Servo configured");
-    response["id"] =
-        existingServo->id;  // Use ID from the (potentially new) servo
-    response["pin"] = existingServo->pin;
-    response["minAngle"] = existingServo->minAngle;
-    response["maxAngle"] = existingServo->maxAngle;
-    response["minPulseWidth"] = existingServo->minPulseWidth;
-    response["maxPulseWidth"] = existingServo->maxPulseWidth;
-    response["speed"] = existingServo->speed;
-    response["currentAngle"] = existingServo->currentAngle;
+    response["id"] = cfg_id;
     response["componentGroup"] = F("servos");
     String jsonResponse;
     serializeJson(response, jsonResponse);
     client->text(jsonResponse);
-    return;  // Exit after configure
-  }
 
-  // For other actions, servo must exist
-  if (!servo) {
-    client->text(String(F("ERROR: Servo not found for control/action: ")) + id);
-    return;
-  }
-
-  // If a new control command comes in, it might override a pending timed move.
-  // The pendingCommandId will be overwritten if the new command also has one.
-  // isActionPending and durations will be reset if it's a new sequence command.
-
-  if (strcmp(action, "control") == 0) {
-    StaticJsonDocument<128> response;  // For success responses
-    response["id"] = servo->id;
-    response["componentGroup"] = F("servos");
-    bool action_taken = false;
-    bool isSequenceCommand = doc.containsKey("commandId");
-
-    if (doc.containsKey("speed") &&
-        !isSequenceCommand) {  // Speed only for manual
-      servo->speed = constrain(doc["speed"].as<int>(), 1, 100);
-      response["status"] = F("OK");
-      response["speed"] = servo->speed;
-      action_taken = true;
+  } else if (strcmp(action, "control") == 0) {
+    // New control action for servos (similar to stepper control)
+    const char *command = doc["command"];
+    if (!command) {
+      client->text(F("ERROR: Missing 'command' for servo control"));
+      return;
     }
 
-    int newTargetAngle = servo->targetAngle;  // Default to current target
-    bool angleChanged = false;
-
-    if (doc.containsKey("angle")) {  // Direct angle key
-      newTargetAngle = doc["angle"];
-      angleChanged = true;
-    } else if (doc.containsKey("command")) {
-      String cmd = doc["command"].as<String>();
-      if (cmd == F("setAngle") && doc.containsKey("value")) {
-        newTargetAngle = doc["value"];
-        angleChanged = true;
-      }
-      // ... other commands like attach, detach, stop ...
-      if (cmd == F("attach")) { /* ... */
-        action_taken = true;
-      }
-      if (cmd == F("detach")) { /* ... */
-        action_taken = true;
-      }
-      if (cmd == F("stop")) {  // Forcibly stop any movement
-        servo->isMoving = false;
-        servo->isActionPending = false;  // Stop timed sequence action too
-        servo->calculatedMoveDuration = 0;
-        response["status"] = F("OK");
-        response["message"] = F("Servo movement stopped");
-        response["angle"] = servo->currentAngle;
-        action_taken = true;
-      }
+    ServoConfig *servo = findServoById(id);
+    if (!servo) {
+      sendServoNotFoundError(client, id);
+      return;
     }
 
-    if (angleChanged) {
-      servo->targetAngle =
-          constrain(newTargetAngle, servo->minAngle, servo->maxAngle);
-      servo->targetPulseWidth = angleToPulseWidth(*servo, servo->targetAngle);
-      servo->isMoving = true;  // General flag that it needs to move
-      action_taken = true;
+    if (strcmp(command, "move") == 0) {
+      int angle = doc["angle"] | -1;
 
-      if (isSequenceCommand) {
-        const char *commandId = doc["commandId"];
-        servo->pendingCommandId = commandId;
-        servo->isActionPending = true;
-        servo->speed = 100;  // Force full speed for sequenced moves
+      if (angle < 0) {
+        client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
+        return;
+      }
 
-        float degreesToMove = abs(servo->targetAngle - servo->currentAngle);
-        servo->calculatedMoveDuration =
-            (unsigned long)(degreesToMove * SERVO_MS_PER_DEGREE_FULL_SPEED);
-        servo->movementStartTime = millis();
+      // Process speed if provided
+      if (doc.containsKey("speed")) {
+        int speed = doc["speed"].as<int>();
+        // Ensure speed is in valid range
+        if (speed < 1) speed = 1;
+        if (speed > 100) speed = 100;
+        servo->speed = speed;
+      }
 
-        Serial.printf(
-            "Servo %s: Seq cmd %s. Target: %d, Cur: %d, DegToMove: %.2f, "
-            "Duration: %lu ms\n",
-            servo->id.c_str(), commandId, servo->targetAngle,
-            servo->currentAngle, degreesToMove, servo->calculatedMoveDuration);
+      // Store command ID if provided (for sequence tracking)
+      if (doc.containsKey("commandId")) {
+        servo->pendingCommandId = doc["commandId"].as<String>();
+      }
+
+      // Try to move the servo
+      if (moveServo(*servo, angle)) {
+        char buffer[100];
+        snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
+                 id.c_str(), angle);
+        client->text(buffer);
       } else {
-        // Manual move, not a timed/sequenced one. Clear sequence tracking.
-        servo->isActionPending = false;
-        servo->calculatedMoveDuration = 0;
-        // If manual speed is 100, it will behave like old immediate move unless
-        // updateServoMovements is changed
-        if (servo->speed >= 100) {
-          setServoPulseWidth(*servo, servo->targetPulseWidth);
-          servo->isMoving = false;  // Manual immediate move is done
-        }
+        String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
+                          F(" to angle ") + String(angle);
+        client->text(errorMsg);
       }
-      response["status"] = F("OK");
-      response["targetAngle"] = servo->targetAngle;
-      response["currentAngle"] =
-          servo->currentAngle;  // Reports angle before move starts for sequence
+    } else if (strcmp(command, "detach") == 0) {
+      cleanupServo(*servo);
+      client->text(String(F("OK: Servo ")) + id + F(" detached"));
+    } else if (strcmp(command, "setParams") == 0) {
+      if (doc.containsKey("minAngle")) {
+        servo->minAngle = doc["minAngle"].as<int>();
+      }
+      if (doc.containsKey("maxAngle")) {
+        servo->maxAngle = doc["maxAngle"].as<int>();
+      }
+      if (doc.containsKey("minPulseWidth")) {
+        servo->minPulseWidth = doc["minPulseWidth"].as<int>();
+      }
+      if (doc.containsKey("maxPulseWidth")) {
+        servo->maxPulseWidth = doc["maxPulseWidth"].as<int>();
+      }
+
+      client->text(String(F("OK: Servo parameters updated for ")) + id);
+    } else {
+      client->text(F("ERROR: Unknown servo command"));
+    }
+  } else if (strcmp(action, "moveServo") == 0) {
+    // Legacy action for backward compatibility
+    int angle = doc["angle"] | -1;
+
+    if (angle < 0) {
+      client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
+      return;
     }
 
-    // ... (rest of the control logic for attach, detach, other non-angle
-    // commands if any)
-    // ... (ensure response is sent if action_taken)
-    if (action_taken) {
-      String jsonResponse;
-      serializeJson(response, jsonResponse);
-      client->text(jsonResponse);
-    } else if (!doc.containsKey("speed") && !angleChanged &&
-               !doc.containsKey("command")) {
-      client->text(F("ERROR: No valid control key for servo"));
+    ServoConfig *servo = findServoById(id);
+    if (!servo) {
+      sendServoNotFoundError(client, id);
+      return;
     }
+
+    // Store command ID if provided (for sequence tracking)
+    if (doc.containsKey("commandId")) {
+      servo->pendingCommandId = doc["commandId"].as<String>();
+    }
+
+    // Try to move the servo
+    if (moveServo(*servo, angle)) {
+      char buffer[100];
+      snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
+               id.c_str(), angle);
+      client->text(buffer);
+    } else {
+      String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
+                        F(" to angle ") + String(angle);
+      client->text(errorMsg);
+    }
+
+  } else if (strcmp(action, "detachServo") == 0) {
+    // Legacy action for backward compatibility
+    ServoConfig *servo = findServoById(id);
+    if (!servo) {
+      sendServoNotFoundError(client, id);
+      return;
+    }
+
+    cleanupServo(*servo);
+    client->text(String(F("OK: Servo ")) + id + F(" detached"));
 
   } else if (strcmp(action, "remove") == 0) {
     auto it = std::remove_if(configuredServos.begin(), configuredServos.end(),
                              [&](const ServoConfig &s) { return s.id == id; });
+
     if (it != configuredServos.end()) {
-      detachServoPWM(*it);  // Detach before erasing
+      cleanupServo(*it);  // Clean up before erasing
       configuredServos.erase(it, configuredServos.end());
       client->text(String(F("OK: Servo removed: ")) + id);
     } else {
       client->text(String(F("ERROR: Servo not found for removal: ")) + id);
     }
+
   } else {
     client->text(F("ERROR: Unknown servo action"));
   }

@@ -2,205 +2,179 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <AsyncWebSocket.h>
 
 // Forward declaration for WebSocket instance
 extern AsyncWebSocket ws;
 
-// Convert angle (degrees) to pulse width (microseconds)
-int angleToPulseWidth(const ServoConfig &config, int angle) {
-  angle = constrain(angle, config.minAngle, config.maxAngle);
-  return map(angle, config.minAngle, config.maxAngle, config.minPulseWidth,
-             config.maxPulseWidth);
-}
-
-// Convert pulse width (microseconds) to angle (degrees)
-int pulseWidthToAngle(const ServoConfig &config, int pulseWidth) {
-  pulseWidth =
-      constrain(pulseWidth, config.minPulseWidth, config.maxPulseWidth);
-  return map(pulseWidth, config.minPulseWidth, config.maxPulseWidth,
-             config.minAngle, config.maxAngle);
-}
-
-// Attach a servo using ESP32 LEDC peripheral
-void attachServoPWM(ServoConfig &servoConfig) {
-  if (servoConfig.isAttached) return;
-
-  // Find an available LEDC channel (simple strategy: use pin number modulo 16
-  // for uniqueness) ESP32 has 16 channels (0-15)
-  servoConfig.channel = servoConfig.pin % 16;
-  // A more robust system might check for channel availability if many servos
-  // are used.
-
-  // Configure LEDC for servo control (50Hz frequency, 16-bit resolution)
-  // 50Hz = 20ms period. 16-bit resolution gives 65536 steps.
-  // Standard servo pulse widths are typically 500µs to 2500µs.
-  ledcSetup(servoConfig.channel, 50, 16);
-  ledcAttachPin(servoConfig.pin, servoConfig.channel);
-
-  // Set initial position (currentAngle or a default if not set)
-  int initialPulseWidth =
-      angleToPulseWidth(servoConfig, servoConfig.currentAngle);
-  if (servoConfig.currentPulseWidth == -1) {  // If not already set
-    servoConfig.currentPulseWidth = initialPulseWidth;
+// Initialize a servo based on its configuration
+void initializeServo(ServoConfig &servoConfig) {
+  // Clean up any existing attachment
+  if (servoConfig.isAttached) {
+    servoConfig.servo.detach();
+    servoConfig.isAttached = false;
   }
-  servoConfig.targetPulseWidth = servoConfig.currentPulseWidth;
 
-  // Convert microseconds to LEDC duty cycle value
-  // Duty cycle = (pulseWidth_us / 20000_us_period) * 65536_resolution
-  uint32_t duty = (uint32_t)((servoConfig.currentPulseWidth / 20000.0) * 65535);
-  ledcWrite(servoConfig.channel, duty);
+  // Set PWM parameters (standard 50Hz servo frequency)
+  servoConfig.servo.setPeriodHertz(50);
 
-  servoConfig.isAttached = true;
-  Serial.printf(
-      "Servo %s (Pin %d, Ch %d) attached. Initial PW: %dµs, Angle: %d\n",
-      servoConfig.id.c_str(), servoConfig.pin, servoConfig.channel,
-      servoConfig.currentPulseWidth, servoConfig.currentAngle);
+  // Attach servo to pin with pulse width limits
+  servoConfig.servo.attach(servoConfig.pin, servoConfig.minPulseWidth,
+                           servoConfig.maxPulseWidth);
+
+  // Check if attachment was successful
+  servoConfig.isAttached = servoConfig.servo.attached();
+
+  // Move to initial position if attached
+  if (servoConfig.isAttached) {
+    servoConfig.servo.write(servoConfig.currentAngle);
+  }
+
+  Serial.printf("Servo %s: Initialized on pin %d, attached=%s\n",
+                servoConfig.id.c_str(), servoConfig.pin,
+                servoConfig.isAttached ? "true" : "false");
 }
 
-// Detach a servo from LEDC
-void detachServoPWM(ServoConfig &servoConfig) {
-  if (!servoConfig.isAttached) return;
-  ledcDetachPin(servoConfig.pin);
-  servoConfig.isAttached = false;
-  servoConfig.isMoving = false;  // Stop any movement
-  Serial.printf("Servo %s (Pin %d, Ch %d) detached.\n", servoConfig.id.c_str(),
-                servoConfig.pin, servoConfig.channel);
+// Clean up a servo (e.g., before reconfiguration or removal)
+void cleanupServo(ServoConfig &servoConfig) {
+  if (servoConfig.isAttached) {
+    servoConfig.servo.detach();
+    servoConfig.isAttached = false;
+  }
 }
 
-// Set servo position by writing pulse width with microsecond precision
-void setServoPulseWidth(ServoConfig &servoConfig, int pulseWidth_us) {
+// Check if an angle is within the servo's range
+bool isValidAngle(ServoConfig &servoConfig, int angle) {
+  return (angle >= servoConfig.minAngle && angle <= servoConfig.maxAngle);
+}
+
+// Move servo to a specified angle
+bool moveServo(ServoConfig &servoConfig, int angle) {
+  // Validate angle
+  if (!isValidAngle(servoConfig, angle)) {
+    Serial.printf("Servo %s: Invalid angle %d (range: %d-%d)\n",
+                  servoConfig.id.c_str(), angle, servoConfig.minAngle,
+                  servoConfig.maxAngle);
+    return false;
+  }
+
+  // Ensure servo is attached
   if (!servoConfig.isAttached) {
-    attachServoPWM(servoConfig);  // Ensure attached
+    initializeServo(servoConfig);
+
+    if (!servoConfig.isAttached) {
+      Serial.printf("Servo %s: Failed to attach during move\n",
+                    servoConfig.id.c_str());
+      return false;
+    }
   }
 
-  pulseWidth_us = constrain(pulseWidth_us, servoConfig.minPulseWidth,
-                            servoConfig.maxPulseWidth);
+  // Save previous angle for calculating duration
+  servoConfig.previousAngle = servoConfig.currentAngle;
 
-  uint32_t duty = (uint32_t)((pulseWidth_us / 20000.0) * 65535);
-  ledcWrite(servoConfig.channel, duty);
+  // Store target angle
+  servoConfig.targetAngle = angle;
 
-  // Update servoConfig's internal state
-  servoConfig.currentPulseWidth = pulseWidth_us;
-  servoConfig.currentAngle = pulseWidthToAngle(servoConfig, pulseWidth_us);
+  // For speed control, calculate movement speed based on speed setting (1-100%)
+  // The ESP32Servo library doesn't directly support speed control, but we can
+  // log what we would do with speed in a real implementation.
+  Serial.printf("Servo %s: Moving to angle %d\n", servoConfig.id.c_str(),
+                angle);
+
+  // Move servo to target angle
+  servoConfig.servo.write(angle);
+
+  // Update stored position
+  servoConfig.currentAngle = angle;
+
+  // Reset timing data
+  servoConfig.moveStartTime = 0;
+  servoConfig.moveDuration = 0;
+
+  // Mark as pending for action completion tracking
+  servoConfig.isActionPending = true;
+
+  return true;
 }
 
-// Update servo movements based on speed and target positions
-void updateServoMovements() {
-  unsigned long currentTime = millis();
-  static unsigned long lastReportTime = 0;
+// Send error message for when a servo is not found
+void sendServoNotFoundError(AsyncWebSocketClient *client, const String &id) {
+  StaticJsonDocument<128> response;
+  response["status"] = F("ERROR");
+  response["message"] = F("Servo not found");
+  response["id"] = id;
+  response["componentGroup"] = F("servos");
 
-  for (auto &servoConfig : configuredServos) {
-    // If it's a timed sequence action that is pending
-    if (servoConfig.isActionPending && servoConfig.calculatedMoveDuration > 0) {
-      if (currentTime - servoConfig.movementStartTime >=
-          servoConfig.calculatedMoveDuration) {
-        // Time is up for this sequenced move
+  String jsonResponse;
+  serializeJson(response, jsonResponse);
+  client->text(jsonResponse);
+}
+
+// Update servo action status (for tracking motion completion)
+void updateServoActionStatus() {
+  for (auto &servo : configuredServos) {
+    if (servo.isActionPending) {
+      // Get current time
+      unsigned long currentTime = millis();
+
+      // Check if this is the first time we're processing this pending action
+      if (servo.moveStartTime == 0) {
+        // Record the start time and calculate the expected duration
+        servo.moveStartTime = currentTime;
+
+        // Calculate move duration based on angle distance and speed setting
+        int angleDistance = abs(servo.targetAngle - servo.previousAngle);
+
+        // Default servo speed is 60 degrees in 230ms (full speed)
+        // Scale by speed factor (0-100%)
+        float speedFactor = servo.speed / 100.0f;
+        if (speedFactor <= 0)
+          speedFactor = 1.0f;  // Ensure we don't divide by zero
+
+        // Calculate duration - more speed = less time
+        servo.moveDuration = (unsigned long)(SERVO_MS_PER_DEGREE_FULL_SPEED *
+                                             angleDistance / speedFactor);
+
+        // Ensure a minimum duration for very small movements
+        if (servo.moveDuration < 50) servo.moveDuration = 50;
+
         Serial.printf(
-            "Servo %s: Timed move for cmd %s complete. Duration: %lu ms. "
-            "Forcing to target %d.\n",
-            servoConfig.id.c_str(), servoConfig.pendingCommandId.c_str(),
-            servoConfig.calculatedMoveDuration, servoConfig.targetAngle);
-
-        // Force state to target
-        servoConfig.currentAngle = servoConfig.targetAngle;
-        servoConfig.currentPulseWidth =
-            angleToPulseWidth(servoConfig, servoConfig.targetAngle);
-        setServoPulseWidth(
-            servoConfig,
-            servoConfig.currentPulseWidth);  // Final electrical command
-
-        servoConfig.isMoving = false;
-        servoConfig.isActionPending = false;
-
-        // Send actionComplete message
-        StaticJsonDocument<256> completionMsg;
-        completionMsg["type"] = "actionComplete";
-        completionMsg["componentId"] = servoConfig.id;
-        completionMsg["componentGroup"] = "servos";
-        completionMsg["commandId"] = servoConfig.pendingCommandId;
-        completionMsg["success"] = true;
-        completionMsg["angle"] = servoConfig.currentAngle;
-        String completionJson;
-        serializeJson(completionMsg, completionJson);
-        ws.textAll(completionJson);
-
-        servoConfig.pendingCommandId = "";
-        servoConfig.calculatedMoveDuration = 0;  // Clear duration
-
-        // Send a general status update
-        StaticJsonDocument<128> updateDoc;
-        updateDoc["id"] = servoConfig.id;
-        updateDoc["angle"] = servoConfig.currentAngle;
-        updateDoc["status"] = "IDLE";
-        updateDoc["componentGroup"] = "servos";
-        String output;
-        serializeJson(updateDoc, output);
-        ws.textAll(output);
-        continue;  // Move to next servo
+            "Servo %s: Movement from %d to %d (distance %d) expected to take "
+            "%lu ms at speed %d%%\n",
+            servo.id.c_str(), servo.previousAngle, servo.targetAngle,
+            angleDistance, servo.moveDuration, servo.speed);
       }
-      // If time is not up, isMoving should be true (set by message_handler) to
-      // allow PWM stepping
-    }
 
-    // Standard PWM stepping logic (applies to manual moves, and to sequence
-    // moves during their calculatedDuration)
-    if (!servoConfig.isAttached || !servoConfig.isMoving) {
-      continue;
-    }
+      // Check if we've waited long enough for the movement to complete
+      if (currentTime - servo.moveStartTime >= servo.moveDuration) {
+        Serial.printf("Servo %s: Movement complete after %lu ms\n",
+                      servo.id.c_str(), currentTime - servo.moveStartTime);
 
-    // This check is important for manual moves, or if a sequence move finishes
-    // by reaching pulse target before time (unlikely with current logic)
-    if (servoConfig.currentPulseWidth == servoConfig.targetPulseWidth &&
-        !servoConfig.isActionPending) {
-      servoConfig.isMoving = false;
-      // For manual moves that reach target, send a general status update
-      StaticJsonDocument<128> updateDoc;
-      updateDoc["id"] = servoConfig.id;
-      updateDoc["angle"] = servoConfig.currentAngle;
-      updateDoc["status"] = "IDLE";
-      updateDoc["componentGroup"] = "servos";
-      String output;
-      serializeJson(updateDoc, output);
-      ws.textAll(output);
-      continue;
-    }
+        // Reset timing variables
+        servo.moveStartTime = 0;
+        servo.moveDuration = 0;
+        servo.previousAngle = servo.currentAngle;
 
-    // Calculate delay based on servoConfig.speed (which is 100 for sequences)
-    int delayBetweenSteps =
-        map(servoConfig.speed, 1, 100, 20, 2);  // 2ms for speed 100
-    if (currentTime - servoConfig.lastMoveTime <
-        (unsigned long)delayBetweenSteps) {
-      continue;
-    }
+        // Mark as completed
+        servo.isActionPending = false;
 
-    int pulseWidthChangePerCycle =
-        map(servoConfig.speed, 1, 100, 1, 25);  // 25us for speed 100
-    int direction =
-        (servoConfig.targetPulseWidth > servoConfig.currentPulseWidth) ? 1 : -1;
-    int remainingPulseWidth =
-        abs(servoConfig.targetPulseWidth - servoConfig.currentPulseWidth);
-    int actualChange = min(pulseWidthChangePerCycle, remainingPulseWidth);
+        // If we have a pending command ID, send completion notification
+        if (!servo.pendingCommandId.isEmpty()) {
+          StaticJsonDocument<256> completionMsg;
+          completionMsg["type"] = "actionComplete";
+          completionMsg["componentId"] = servo.id;
+          completionMsg["componentGroup"] = "servos";
+          completionMsg["commandId"] = servo.pendingCommandId;
+          completionMsg["success"] = true;
+          completionMsg["angle"] = servo.currentAngle;
 
-    if (actualChange > 0) {
-      int newPulseWidth =
-          servoConfig.currentPulseWidth + (direction * actualChange);
-      setServoPulseWidth(servoConfig, newPulseWidth);
-      servoConfig.lastMoveTime = currentTime;
+          String completionJson;
+          serializeJson(completionMsg, completionJson);
+          ws.textAll(completionJson);
 
-      if (currentTime - lastReportTime > 100) {
-        lastReportTime = currentTime;
-        StaticJsonDocument<128> updateDoc;
-        updateDoc["id"] = servoConfig.id;
-        updateDoc["angle"] = servoConfig.currentAngle;
-        updateDoc["componentGroup"] = "servos";
-        String output;
-        serializeJson(updateDoc, output);
-        ws.textAll(output);
+          // Clear the pending command ID
+          servo.pendingCommandId = "";
+        }
       }
-    } else if (!servoConfig.isActionPending) {  // If not a timed action and no
-                                                // change, stop moving
-      servoConfig.isMoving = false;
     }
   }
 }

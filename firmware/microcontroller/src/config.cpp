@@ -27,9 +27,29 @@ IoPinConfig *findPinById(const String &id) {
 }
 
 ServoConfig *findServoById(const String &id) {
-  for (auto &servoConfig : configuredServos) {
-    if (servoConfig.id == id) return &servoConfig;
+  Serial.printf("DEBUG: findServoById called for id='%s'\n", id.c_str());
+  Serial.printf("DEBUG: Searching through %d configured servos\n",
+                configuredServos.size());
+
+  if (configuredServos.empty()) {
+    Serial.println("DEBUG: No servos configured yet!");
+    return nullptr;
   }
+
+  for (size_t i = 0; i < configuredServos.size(); i++) {
+    auto &servoConfig = configuredServos[i];
+    Serial.printf("DEBUG: Comparing with servo[%d] id='%s'\n", i,
+                  servoConfig.id.c_str());
+
+    if (servoConfig.id == id) {
+      Serial.printf("DEBUG: Found matching servo at index %d\n", i);
+      return &servoConfig;
+    }
+  }
+
+  Serial.printf("DEBUG: No servo found with id='%s'\n", id.c_str());
+  // If we can't find it, dump all servo configurations to help diagnose
+  debugPrintServoConfigurations();
   return nullptr;
 }
 

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Bounce2.h>
+#include <ESP32Servo.h>  // Add standard servo library
 #include <FastAccelStepper.h>
 
 #include <map>
@@ -32,34 +33,27 @@ struct ServoConfig {
   String id;
   String name;
   uint8_t pin;
-  int channel = -1;  // LEDC channel for this servo
+  Servo servo;  // Standard servo instance
   bool isAttached = false;
 
   // Configuration
   int minAngle = 0;
   int maxAngle = 180;
-  int minPulseWidth = 500;   // Pulse width in microseconds for 0 degrees
-  int maxPulseWidth = 2400;  // Pulse width in microseconds for 180 degrees
+  int minPulseWidth = 500;   // Default minimum pulse width in microseconds
+  int maxPulseWidth = 2400;  // Default maximum pulse width in microseconds
+  int speed = 100;           // Movement speed (1-100%)
 
-  // Speed control variables
-  int speed =
-      100;  // Default speed (1-100) for manual control & base for sequence
-  int currentAngle = 90;  // Current angle position (degrees)
-  int targetAngle = 90;   // Target angle to move to (degrees)
+  int currentAngle = 90;   // Current angle position (degrees)
+  int targetAngle = 90;    // Target angle for movement
+  int previousAngle = 90;  // Previous angle before movement started
 
-  // For smooth motion using direct PWM
-  int currentPulseWidth =
-      -1;  // Current pulse width in microseconds, -1 means not set
-  int targetPulseWidth = -1;       // Target pulse width in microseconds
-  unsigned long lastMoveTime = 0;  // Last time the pulse width was updated
-  bool isMoving = false;  // Whether the servo is currently in motion (generic)
+  // Movement timing
+  unsigned long moveStartTime = 0;  // When movement started (millis)
+  unsigned long moveDuration = 0;   // Expected duration of movement (ms)
 
   // Action completion tracking for sequence execution
   bool isActionPending = false;  // Whether a sequence action is in progress
   String pendingCommandId = "";  // ID of the pending sequence command (if any)
-  unsigned long movementStartTime = 0;  // Timestamp when a sequenced move began
-  unsigned long calculatedMoveDuration =
-      0;  // Expected duration for the current sequenced move (ms)
 };
 
 // --- Stepper Configuration ---
@@ -115,5 +109,22 @@ extern std::map<String, unsigned long> lastPinReadTime;
 IoPinConfig* findPinById(const String& id);
 ServoConfig* findServoById(const String& id);
 StepperConfig* findStepperById(const String& id);
+
+// --- Debug printing functions for configuration diagnostics ---
+inline void debugPrintServoConfigurations() {
+  Serial.println(F("===== SERVO CONFIGURATION DIAGNOSTICS ====="));
+  Serial.printf("Total configured servos: %d\n", configuredServos.size());
+
+  for (size_t i = 0; i < configuredServos.size(); i++) {
+    const auto& servo = configuredServos[i];
+    Serial.printf(
+        "Servo[%d]: id='%s', name='%s', pin=%d, range=[%d-%d], "
+        "pulseWidth=[%d-%d], angle=%d, attached=%s\n",
+        i, servo.id.c_str(), servo.name.c_str(), servo.pin, servo.minAngle,
+        servo.maxAngle, servo.minPulseWidth, servo.maxPulseWidth,
+        servo.currentAngle, servo.isAttached ? "true" : "false");
+  }
+  Serial.println(F("=========================================="));
+}
 
 #endif  // CONFIG_H

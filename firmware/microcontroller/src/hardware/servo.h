@@ -1,24 +1,26 @@
 #ifndef SERVO_H
 #define SERVO_H
 
+#include <AsyncWebSocket.h>
+
 #include "../config.h"
 
-// Convert angle (degrees) to pulse width (microseconds)
-int angleToPulseWidth(const ServoConfig &config, int angle);
+// Initialize a servo based on its configuration
+void initializeServo(ServoConfig &servoConfig);
 
-// Convert pulse width (microseconds) to angle (degrees)
-int pulseWidthToAngle(const ServoConfig &config, int pulseWidth);
+// Clean up a servo (e.g., before reconfiguration or removal)
+void cleanupServo(ServoConfig &servoConfig);
 
-// Attach a servo using ESP32 LEDC peripheral
-void attachServoPWM(ServoConfig &servoConfig);
+// Check if an angle is within the servo's range
+bool isValidAngle(ServoConfig &servoConfig, int angle);
 
-// Detach a servo from LEDC
-void detachServoPWM(ServoConfig &servoConfig);
+// Move servo to a specified angle
+bool moveServo(ServoConfig &servoConfig, int angle);
 
-// Set servo position by writing pulse width with microsecond precision
-void setServoPulseWidth(ServoConfig &servoConfig, int pulseWidth_us);
+// Send error message for when a servo is not found
+void sendServoNotFoundError(AsyncWebSocketClient *client, const String &id);
 
-// Update servo movements based on speed and target positions
-void updateServoMovements();
+// Update servo action status (for tracking motion completion)
+void updateServoActionStatus();
 
 #endif  // SERVO_H

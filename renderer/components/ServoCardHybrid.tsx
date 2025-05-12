@@ -207,18 +207,40 @@ export default function ServoCardHybrid({
   const moveToAngle = async (newAngle: number) => {
     const limitedAngle = Math.min(Math.max(newAngle, minAngle), maxAngle);
     console.log(
-      `[ServoCard ${id}] Sending setAngle: ${limitedAngle}, speed: ${speed}`
+      `[ServoCard ${id}] Sending servo move command: ${limitedAngle}, speed: ${speed}`
     );
+
+    // Generate a unique command ID for tracking the movement
+    const commandId = `servo_move_${id}_${Date.now()}`;
+
     try {
-      await sendMessage({
+      // Use the new control action pattern first
+      const success = await sendMessage({
         action: "control",
         componentGroup: "servos",
         id: id,
-        command: "setAngle",
-        value: limitedAngle,
+        command: "move",
+        angle: limitedAngle,
+        commandId: commandId,
       });
+
+      // If the new pattern fails, fall back to the legacy pattern
+      if (!success) {
+        console.log(
+          `[ServoCard ${id}] Falling back to legacy moveServo command`
+        );
+        await sendMessage({
+          action: "moveServo",
+          componentGroup: "servos",
+          id: id,
+          angle: limitedAngle,
+          commandId: commandId,
+        });
+      }
+
+      console.log(`[ServoCard ${id}] Sent move command with ID: ${commandId}`);
     } catch (error) {
-      console.error(`[ServoCard ${id}] Error sending angle command:`, error);
+      console.error(`[ServoCard ${id}] Error sending move command:`, error);
     }
   };
 
@@ -286,6 +308,9 @@ export default function ServoCardHybrid({
       if (onSettingsChange) {
         onSettingsChange(id, { minAngle: validatedMin });
       }
+
+      // Send updated configuration to the microcontroller
+      updateServoConfig({ minAngle: validatedMin });
     }
   };
 
@@ -299,20 +324,89 @@ export default function ServoCardHybrid({
       if (onSettingsChange) {
         onSettingsChange(id, { maxAngle: validatedMax });
       }
+
+      // Send updated configuration to the microcontroller
+      updateServoConfig({ maxAngle: validatedMax });
     }
   };
-
-  // Add function to update servo speed
-  const updateSpeed = async (newSpeed: number) => {
-    const validSpeed = Math.max(1, Math.min(100, newSpeed));
-    setSpeed(validSpeed);
-    console.log(`[ServoCard ${id}] Setting speed: ${validSpeed}`);
+  // Function to send updated servo configuration to the microcontroller
+  const updateServoConfig = async (configChanges: {
+    minAngle?: number;
+    maxAngle?: number;
+    minPulseWidth?: number;
+    maxPulseWidth?: number;
+  }) => {
     try {
-      if (onSettingsChange) {
-        onSettingsChange(id, { speed: validSpeed });
+      console.log(
+        `[ServoCard ${id}] Updating servo configuration:`,
+        configChanges
+      );
+
+      // For parameter updates, we can use the setParams command with the control action
+      if (
+        configChanges.minAngle !== undefined ||
+        configChanges.maxAngle !== undefined ||
+        configChanges.minPulseWidth !== undefined ||
+        configChanges.maxPulseWidth !== undefined
+      ) {
+        const success = await sendMessage({
+          action: "control",
+          componentGroup: "servos",
+          id: id,
+          command: "setParams",
+          minAngle:
+            configChanges.minAngle !== undefined
+              ? configChanges.minAngle
+              : minAngle,
+          maxAngle:
+            configChanges.maxAngle !== undefined
+              ? configChanges.maxAngle
+              : maxAngle,
+          minPulseWidth: configChanges.minPulseWidth || 500,
+          maxPulseWidth: configChanges.maxPulseWidth || 2400,
+        });
+
+        // If the setParams command worked, we don't need to do a full configure
+        if (success) {
+          console.log(
+            `[ServoCard ${id}] Servo parameters updated successfully`
+          );
+          return;
+        }
       }
+
+      // Fall back to the full configure action if setParams didn't succeed
+      // Create the configuration message
+      const configMessage = {
+        action: "configure",
+        componentGroup: "servos",
+        id: id,
+        config: {
+          id: id,
+          name: name,
+          pin: pins.control,
+          // Include current values for all parameters
+          minAngle:
+            configChanges.minAngle !== undefined
+              ? configChanges.minAngle
+              : minAngle,
+          maxAngle:
+            configChanges.maxAngle !== undefined
+              ? configChanges.maxAngle
+              : maxAngle,
+          minPulseWidth: configChanges.minPulseWidth || 500, // Default if not specified
+          maxPulseWidth: configChanges.maxPulseWidth || 2400, // Default if not specified
+          initialAngle: angle, // Use current angle as initial angle
+        },
+      };
+
+      await sendMessage(configMessage);
+      console.log(`[ServoCard ${id}] Servo configuration updated successfully`);
     } catch (error) {
-      console.error(`[ServoCard ${id}] Error sending speed command:`, error);
+      console.error(
+        `[ServoCard ${id}] Error updating servo configuration:`,
+        error
+      );
     }
   };
 
@@ -330,6 +424,23 @@ export default function ServoCardHybrid({
           // Handle any specific updates needed
           if (data.status === "ERROR" && data.message) {
             console.error(`[ServoCard ${id}] Error:`, data.message);
+          }
+
+          // Handle action completion events
+          if (
+            data.type === "actionComplete" &&
+            data.componentId === id &&
+            data.componentGroup === "servos"
+          ) {
+            console.log(
+              `[ServoCard ${id}] Action completed: ${data.commandId}, success: ${data.success}`
+            );
+
+            if (data.success && data.angle !== undefined) {
+              console.log(
+                `[ServoCard ${id}] Movement completed to angle: ${data.angle}`
+              );
+            }
           }
         }
       } catch (error) {
@@ -369,6 +480,37 @@ export default function ServoCardHybrid({
     setMaxAngleInput(maxAngle.toString());
   }, [maxAngle]);
 
+  // Add function to detach the servo
+  const detachServo = async () => {
+    try {
+      console.log(`[ServoCard ${id}] Detaching servo`);
+
+      // Try the new control action pattern first
+      const success = await sendMessage({
+        action: "control",
+        componentGroup: "servos",
+        id: id,
+        command: "detach",
+      });
+
+      // If the new pattern fails, fall back to the legacy pattern
+      if (!success) {
+        console.log(
+          `[ServoCard ${id}] Falling back to legacy detachServo command`
+        );
+        await sendMessage({
+          action: "detachServo",
+          componentGroup: "servos",
+          id: id,
+        });
+      }
+
+      console.log(`[ServoCard ${id}] Servo detached successfully`);
+    } catch (error) {
+      console.error(`[ServoCard ${id}] Error detaching servo:`, error);
+    }
+  };
+
   return (
     <Card className="shadow-md">
       <CardHeader className="pb-2">
@@ -402,6 +544,10 @@ export default function ServoCardHybrid({
                 <DropdownMenuItem onClick={onDuplicate}>
                   <Copy className="h-4 w-4 mr-2" />
                   Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={detachServo}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Detach Servo
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={onDelete}
@@ -524,25 +670,6 @@ export default function ServoCardHybrid({
                   className="mt-1"
                   placeholder="Max"
                 />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between mb-1">
-                <Label htmlFor={`${id}-speed-slider`}>Movement Speed</Label>
-                <span className="text-sm font-medium">{speed}%</span>
-              </div>
-              <Slider
-                id={`${id}-speed-slider`}
-                value={[speed]}
-                min={1}
-                max={100}
-                step={1}
-                onValueChange={(value) => updateSpeed(value[0])}
-              />
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                <span>Slow</span>
-                <span>Fast</span>
               </div>
             </div>
 

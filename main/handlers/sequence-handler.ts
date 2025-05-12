@@ -322,8 +322,10 @@ async function handleActionStep(step: ActionStep): Promise<void> {
         action: "control",
         componentGroup: "servos",
         id: step.deviceId,
-        command: "setAngle",
-        value: step.value,
+        command: "move",
+        angle: step.value,
+        // Include speed if available, otherwise use default (100%)
+        speed: step.speed !== undefined ? step.speed : 100,
         commandId: mainCommandId,
       };
     } else {

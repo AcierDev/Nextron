@@ -16,6 +16,11 @@ AsyncWebSocket ws("/ws");
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);  // Give serial monitor a chance to connect
+
+  Serial.println(F("\n\n===== Everwood CNC Firmware Starting ====="));
+  Serial.println(F("Version: 1.0.0"));
+  Serial.println(F("Build Date: " __DATE__ " " __TIME__ "\n"));
 
   // Initialize WiFi connection
   initWiFi();
@@ -26,7 +31,8 @@ void setup() {
   // Initialize WebSocket server
   initWebSocketServer();
 
-  Serial.println("System initialized and ready");
+  Serial.println(F("System initialized and ready"));
+  Serial.println(F("Waiting for web client connections..."));
 }
 
 void loop() {
@@ -36,22 +42,12 @@ void loop() {
   // Check and maintain WiFi connection
   updateWiFiStatus();
 
-  // Update servo movements for gradual speed control
-  updateServoMovements();
-
   // Check and update input pins
   updatePinValues();
 
   // Update and report stepper positions
   updateStepperPositions();
 
-  // Non-blocking delay replacement
-  static unsigned long previousMillis = 0;
-  unsigned long currentMillis = millis();
-  const unsigned long interval = 1;  // 1ms interval
-
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    // Any tasks that need to run every 1ms would go here
-  }
+  // Update servo action status
+  updateServoActionStatus();
 }
