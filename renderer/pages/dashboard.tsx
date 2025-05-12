@@ -545,6 +545,65 @@ export default function Dashboard() {
     // Jog settings are usually local to UI and don't need to be sent as part of stepper 'configure' to firmware
 
     if (changesMade) {
+      // Always include both speed and acceleration in the configuration update
+      // to prevent one from reverting to default when the other is updated
+      if (!configUpdatePayload.hasOwnProperty("maxSpeed")) {
+        const stepperComponent = components.find(
+          (c) => c.id === motorId && c.type === "stepper"
+        ) as StepperMotorDisplay | undefined;
+        if (stepperComponent?.speed !== undefined) {
+          configUpdatePayload.maxSpeed = stepperComponent.speed;
+        }
+      }
+
+      if (!configUpdatePayload.hasOwnProperty("acceleration")) {
+        const stepperComponent = components.find(
+          (c) => c.id === motorId && c.type === "stepper"
+        ) as StepperMotorDisplay | undefined;
+        if (stepperComponent?.acceleration !== undefined) {
+          configUpdatePayload.acceleration = stepperComponent.acceleration;
+        }
+      }
+
+      // If any homing setting is being updated, include all homing settings to prevent losing configuration
+      const isHomingSettingUpdated =
+        newSettings.initialHomeSensorId !== undefined ||
+        newSettings.initialHomingDirection !== undefined ||
+        newSettings.initialHomingSpeed !== undefined ||
+        newSettings.initialHomeSensorPinActiveState !== undefined ||
+        newSettings.initialHomePositionOffset !== undefined;
+
+      if (isHomingSettingUpdated) {
+        // Get the current stepper component with all its settings
+        const stepperComponent = components.find(
+          (c) => c.id === motorId && c.type === "stepper"
+        ) as StepperMotorDisplay | undefined;
+
+        if (stepperComponent) {
+          // Include all homing settings from the component
+          if (!configUpdatePayload.hasOwnProperty("homeSensorId")) {
+            configUpdatePayload.homeSensorId =
+              stepperComponent.initialHomeSensorId || null;
+          }
+          if (!configUpdatePayload.hasOwnProperty("homingDirection")) {
+            configUpdatePayload.homingDirection =
+              stepperComponent.initialHomingDirection || 1;
+          }
+          if (!configUpdatePayload.hasOwnProperty("homingSpeed")) {
+            configUpdatePayload.homingSpeed =
+              stepperComponent.initialHomingSpeed || 1000;
+          }
+          if (!configUpdatePayload.hasOwnProperty("homeSensorPinActiveState")) {
+            configUpdatePayload.homeSensorPinActiveState =
+              stepperComponent.initialHomeSensorPinActiveState || 0;
+          }
+          if (!configUpdatePayload.hasOwnProperty("homePositionOffset")) {
+            configUpdatePayload.homePositionOffset =
+              stepperComponent.initialHomePositionOffset || 0;
+          }
+        }
+      }
+
       console.log(
         `[Dashboard] Sending stepper configure update for ${motorId}:`,
         configUpdatePayload

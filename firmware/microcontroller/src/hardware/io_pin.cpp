@@ -118,8 +118,6 @@ void updatePinValues() {
         String out;
         serializeJson(msg, out);
 
-        Serial.println(out);
-
         ws.textAll(out);
       }
     }

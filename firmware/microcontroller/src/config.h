@@ -64,8 +64,8 @@ struct StepperConfig {
   uint8_t dirPin = 0;
   uint8_t enaPin = 0;
   FastAccelStepper* stepper = nullptr;
-  float maxSpeed = 1000.0;  // Steps per second
-  float acceleration = 500.0;
+  float maxSpeed = 50000.0;      // Steps per second (increased from 1000.0)
+  float acceleration = 50000.0;  // Steps per second² (increased from 500.0)
   long minPosition = -50000;
   long maxPosition = 50000;
   long currentPosition = 0;
@@ -125,6 +125,23 @@ inline void debugPrintServoConfigurations() {
         servo.currentAngle, servo.isAttached ? "true" : "false");
   }
   Serial.println(F("=========================================="));
+}
+
+// --- Debug printing function for stepper configurations ---
+inline void debugPrintStepperConfigurations() {
+  Serial.println(F("===== STEPPER CONFIGURATION DIAGNOSTICS ====="));
+  Serial.printf("Total configured steppers: %d\n", configuredSteppers.size());
+
+  for (size_t i = 0; i < configuredSteppers.size(); i++) {
+    const auto& stepper = configuredSteppers[i];
+    Serial.printf(
+        "Stepper[%d]: id='%s', name='%s', pins=[PUL:%d,DIR:%d,ENA:%d], "
+        "speed=%.2f, accel=%.2f, range=[%ld-%ld]\n",
+        i, stepper.id.c_str(), stepper.name.c_str(), stepper.pulPin,
+        stepper.dirPin, stepper.enaPin, stepper.maxSpeed, stepper.acceleration,
+        stepper.minPosition, stepper.maxPosition);
+  }
+  Serial.println(F("============================================="));
 }
 
 #endif  // CONFIG_H

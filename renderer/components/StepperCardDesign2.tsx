@@ -68,17 +68,17 @@ interface StepperCardProps {
       minPosition?: number;
       maxPosition?: number;
       stepsPerInch?: number;
-      jogUnit?: "steps" | "inches";
-      jogAmount?: number; // Corresponds to steps if jogUnit is steps
-      jogAmountInches?: number; // Corresponds to inches if jogUnit is inches
+      initialJogUnit?: "steps" | "inches";
+      initialJogAmount?: number; // Corresponds to steps if jogUnit is steps
+      initialJogAmountInches?: number; // Corresponds to inches if jogUnit is inches
       speed?: number;
       acceleration?: number;
       // Homing settings
-      homeSensorId?: string | null; // Allow null or empty string for no sensor
-      homingDirection?: number;
-      homingSpeed?: number;
-      homeSensorPinActiveState?: number; // LOW (0) or HIGH (1)
-      homePositionOffset?: number;
+      initialHomeSensorId?: string | null; // Allow null or empty string for no sensor
+      initialHomingDirection?: number;
+      initialHomingSpeed?: number;
+      initialHomeSensorPinActiveState?: number; // LOW (0) or HIGH (1)
+      initialHomePositionOffset?: number;
     }
   ) => void;
   initialJogUnit?: "steps" | "inches";
@@ -400,34 +400,21 @@ export default function StepperCardDesign2({
     });
   };
 
-  // Function to send speed/acceleration updates
-  const sendSpeedAccelUpdate = async () => {
-    console.log(
-      `[StepperCard ${id}] Sending speed/accel update: Speed=${speed}, Accel=${acceleration}`
-    );
-    await sendMessage({
-      action: "control",
-      componentGroup: "steppers",
-      id: id,
-      command: "setParams",
-      speed: speed,
-      acceleration: acceleration,
-    });
-  };
-
   // Update speed/accel state and send update to device, also notify dashboard
   const handleSpeedChangeCommit = (newSpeedValue: number) => {
     // setSpeed is already called by onValueChange for slider UI responsiveness
-    sendSpeedAccelUpdate(); // Sends to device with current speed state
     if (onSettingsChange) {
+      // The dashboard will send both speed and acceleration to the device
+      // to prevent one from reverting to default when only one is updated
       onSettingsChange(id, { speed: newSpeedValue }); // Updates dashboard config
     }
   };
 
   const handleAccelChangeCommit = (newAccelValue: number) => {
     // setAcceleration is already called by onValueChange for slider UI responsiveness
-    sendSpeedAccelUpdate(); // Sends to device with current acceleration state
     if (onSettingsChange) {
+      // The dashboard will send both speed and acceleration to the device
+      // to prevent one from reverting to default when only one is updated
       onSettingsChange(id, { acceleration: newAccelValue }); // Updates dashboard config
     }
   };
@@ -801,7 +788,7 @@ export default function StepperCardDesign2({
                     setJogUnit(value);
                     console.log(`[StepperCard ${id}] Jog unit set to ${value}`);
                     if (onSettingsChange) {
-                      onSettingsChange(id, { jogUnit: value });
+                      onSettingsChange(id, { initialJogUnit: value });
                     }
                   }}
                 >
@@ -827,7 +814,7 @@ export default function StepperCardDesign2({
                       if (!isNaN(numVal)) {
                         setJogAmount(numVal);
                         if (onSettingsChange) {
-                          onSettingsChange(id, { jogAmount: numVal });
+                          onSettingsChange(id, { initialJogAmount: numVal });
                         }
                       } else if (e.target.value === "") {
                         // If input is cleared, decide what jogAmount (number) should be.
@@ -853,7 +840,9 @@ export default function StepperCardDesign2({
                       if (!isNaN(numVal)) {
                         setJogAmountInches(numVal);
                         if (onSettingsChange) {
-                          onSettingsChange(id, { jogAmountInches: numVal });
+                          onSettingsChange(id, {
+                            initialJogAmountInches: numVal,
+                          });
                         }
                       } else if (e.target.value === "") {
                         // If input is cleared, decide what jogAmountInches (number) should be.
@@ -870,6 +859,8 @@ export default function StepperCardDesign2({
             {/* Homing Sensor Settings Section */}
             <div className="border rounded-md p-3 space-y-3">
               <Label className="font-medium">Homing Sensor Settings</Label>
+              {/* Note: When any homing setting is changed, the dashboard will send all homing settings
+                  to the device to prevent losing configuration values. */}
               <div>
                 <Label htmlFor={`${id}-home-sensor-select`}>
                   Home Sensor Pin
@@ -877,10 +868,15 @@ export default function StepperCardDesign2({
                 <Select
                   value={homeSensorId || ""} // Use empty string for placeholder when homeSensorId is null
                   onValueChange={(value) => {
+                    console.log(
+                      `[StepperCard ${id}] Home sensor pin set to ${value}`
+                    );
                     const newSensorId = value === "__NONE__" ? null : value; // Treat "__NONE__" as null
                     setHomeSensorId(newSensorId);
                     if (onSettingsChange) {
-                      onSettingsChange(id, { homeSensorId: newSensorId });
+                      onSettingsChange(id, {
+                        initialHomeSensorId: newSensorId,
+                      });
                     }
                   }}
                 >
@@ -917,7 +913,7 @@ export default function StepperCardDesign2({
                         setHomingDirection(newDirection);
                         if (onSettingsChange) {
                           onSettingsChange(id, {
-                            homingDirection: newDirection,
+                            initialHomingDirection: newDirection,
                           });
                         }
                       }}
@@ -953,7 +949,9 @@ export default function StepperCardDesign2({
                         if (!isNaN(numVal) && numVal > 0) {
                           setHomingSpeed(numVal);
                           if (onSettingsChange) {
-                            onSettingsChange(id, { homingSpeed: numVal });
+                            onSettingsChange(id, {
+                              initialHomingSpeed: numVal,
+                            });
                           }
                         }
                       }}
@@ -973,7 +971,7 @@ export default function StepperCardDesign2({
                         setHomeSensorPinActiveState(newState);
                         if (onSettingsChange) {
                           onSettingsChange(id, {
-                            homeSensorPinActiveState: newState,
+                            initialHomeSensorPinActiveState: newState,
                           });
                         }
                       }}
@@ -1010,7 +1008,7 @@ export default function StepperCardDesign2({
                           setHomePositionOffset(numVal);
                           if (onSettingsChange) {
                             onSettingsChange(id, {
-                              homePositionOffset: numVal,
+                              initialHomePositionOffset: numVal,
                             });
                           }
                         }

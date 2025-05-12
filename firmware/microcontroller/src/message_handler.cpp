@@ -431,8 +431,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   const char *action = doc["action"];
   String id = doc["id"];  // Common for most stepper actions
 
-  StepperConfig *stepper = findStepperById(id);
-
+  // Handle configuration action separately since it might create a new stepper
   if (strcmp(action, "configure") == 0) {
     JsonObject config = doc["config"];
     String cfg_id = config["id"];
@@ -443,6 +442,17 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     long minPosition = config["minPosition"] | -50000;
     long maxPosition = config["maxPosition"] | 50000;
     float stepsPerInch = config["stepsPerInch"] | 200.0;
+    float maxSpeed = config["maxSpeed"] |
+                     50000.0;  // Default to 50k steps/sec if not specified
+    float acceleration = config["acceleration"] |
+                         50000.0;  // Default to 50k steps/sec² if not specified
+
+    // Optional homing parameters
+    String homeSensorId = config["homeSensorId"] | "";
+    int homingDirection = config["homingDirection"] | 1;
+    float homingSpeed = config["homingSpeed"] | 500.0;
+    int homeSensorPinActiveState = config["homeSensorPinActiveState"] | 0;
+    long homePositionOffset = config["homePositionOffset"] | 0;
 
     if (cfg_id.isEmpty() || name.isEmpty() || pulPin == 0 || dirPin == 0) {
       client->text(
@@ -450,21 +460,63 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       return;
     }
 
+    Serial.printf("Configuring stepper '%s' (ID: %s):\n", name.c_str(),
+                  cfg_id.c_str());
+    Serial.printf("  - Pins: PUL=%d, DIR=%d, ENA=%d\n", pulPin, dirPin, enaPin);
+    Serial.printf("  - Speed: %.2f steps/sec\n", maxSpeed);
+    Serial.printf("  - Acceleration: %.2f steps/sec²\n", acceleration);
+    Serial.printf("  - Position Range: %ld to %ld steps\n", minPosition,
+                  maxPosition);
+    Serial.printf("  - Steps per inch: %.2f\n", stepsPerInch);
+
     StepperConfig *existingStepper = findStepperById(cfg_id);
 
     if (existingStepper) {
       Serial.printf("Updating stepper ID %s (%s)\n", cfg_id.c_str(),
                     name.c_str());
+
+      // Store current values before updating
+      float currentSpeed = existingStepper->maxSpeed;
+      float currentAcceleration = existingStepper->acceleration;
+
+      // Update basic properties
       existingStepper->name = name;
       existingStepper->minPosition = minPosition;
       existingStepper->maxPosition = maxPosition;
       existingStepper->stepsPerInch = stepsPerInch;
-      // Note: Pin configuration for FastAccelStepper is usually set at creation
-      // and might not be easily updatable without recreating the stepper
-      // instance.
+
+      // Update speed and acceleration, preserving existing values if not
+      // specified
+      existingStepper->maxSpeed =
+          config.containsKey("maxSpeed") ? maxSpeed : currentSpeed;
+      existingStepper->acceleration = config.containsKey("acceleration")
+                                          ? acceleration
+                                          : currentAcceleration;
+
+      // Update homing properties
+      existingStepper->homeSensorId = homeSensorId;
+      existingStepper->homingDirection = homingDirection;
+      existingStepper->homingSpeed = homingSpeed;
+      existingStepper->homeSensorPinActiveState = homeSensorPinActiveState;
+      existingStepper->homePositionOffset = homePositionOffset;
+
+      // Update speed and acceleration in the FastAccelStepper instance
+      if (existingStepper->stepper) {
+        existingStepper->stepper->setSpeedInHz(existingStepper->maxSpeed);
+        existingStepper->stepper->setAcceleration(
+            existingStepper->acceleration);
+
+        // Log the actual values being set
+        Serial.printf("  - Updated speed: %.2f steps/sec\n",
+                      existingStepper->maxSpeed);
+        Serial.printf("  - Updated acceleration: %.2f steps/sec²\n",
+                      existingStepper->acceleration);
+      }
     } else {
       Serial.printf("Adding stepper ID %s (%s) on PUL %d, DIR %d, ENA %d\n",
                     cfg_id.c_str(), name.c_str(), pulPin, dirPin, enaPin);
+
+      // Create new stepper config
       StepperConfig newConfig;
       newConfig.id = cfg_id;
       newConfig.name = name;
@@ -474,18 +526,18 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       newConfig.minPosition = minPosition;
       newConfig.maxPosition = maxPosition;
       newConfig.stepsPerInch = stepsPerInch;
+      newConfig.maxSpeed = maxSpeed;
+      newConfig.acceleration = acceleration;
+      newConfig.homeSensorId = homeSensorId;
+      newConfig.homingDirection = homingDirection;
+      newConfig.homingSpeed = homingSpeed;
+      newConfig.homeSensorPinActiveState = homeSensorPinActiveState;
+      newConfig.homePositionOffset = homePositionOffset;
+      newConfig.isHomed = false;
+      newConfig.isHoming = false;
 
-      newConfig.stepper = engine.stepperConnectToPin(pulPin);
-      if (newConfig.stepper) {
-        newConfig.stepper->setDirectionPin(dirPin);
-        if (enaPin > 0) {
-          newConfig.stepper->setEnablePin(enaPin);
-          newConfig.stepper->setAutoEnable(true);
-        } else {
-          newConfig.stepper->setAutoEnable(false);
-        }
-        newConfig.stepper->setSpeedInHz(newConfig.maxSpeed);
-        newConfig.stepper->setAcceleration(newConfig.acceleration);
+      // Initialize the stepper
+      if (initializeStepper(newConfig)) {
         configuredSteppers.push_back(newConfig);
         existingStepper = &configuredSteppers.back();
       } else {
@@ -494,6 +546,8 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         return;
       }
     }
+
+    // Send success response
     StaticJsonDocument<256> response;
     response["status"] = F("OK");
     response["message"] = F("Stepper configured");
@@ -509,6 +563,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   }
 
   // For other actions, stepper must exist
+  StepperConfig *stepper = findStepperById(id);
   if (!stepper || !stepper->stepper) {
     sendStepperNotFoundError(client, id);
     return;
@@ -521,130 +576,159 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       return;
     }
 
+    // Store command ID if provided (for sequence tracking)
+    if (doc.containsKey("commandId")) {
+      stepper->pendingCommandId = doc["commandId"].as<String>();
+    }
+
     if (strcmp(command, "setParams") == 0) {
+      // Update stepper parameters
+      Serial.printf("Updating parameters for stepper '%s':\n",
+                    stepper->name.c_str());
+
+      float oldSpeed = stepper->maxSpeed;
+      float oldAcceleration = stepper->acceleration;
+      bool speedChanged = false;
+      bool accelerationChanged = false;
+
       if (doc.containsKey("speed")) {
         stepper->maxSpeed = doc["speed"].as<float>();
         stepper->stepper->setSpeedInHz(stepper->maxSpeed);
+        speedChanged = true;
+        Serial.printf("  - Speed updated: %.2f → %.2f steps/sec\n", oldSpeed,
+                      stepper->maxSpeed);
       }
+
       if (doc.containsKey("acceleration")) {
         stepper->acceleration = doc["acceleration"].as<float>();
         stepper->stepper->setAcceleration(stepper->acceleration);
+        accelerationChanged = true;
+        Serial.printf("  - Acceleration updated: %.2f → %.2f steps/sec²\n",
+                      oldAcceleration, stepper->acceleration);
       }
-      if (doc.containsKey("minPosition"))
+
+      if (!speedChanged) {
+        Serial.printf("  - Speed unchanged: %.2f steps/sec\n",
+                      stepper->maxSpeed);
+      }
+
+      if (!accelerationChanged) {
+        Serial.printf("  - Acceleration unchanged: %.2f steps/sec²\n",
+                      stepper->acceleration);
+      }
+
+      if (doc.containsKey("minPosition")) {
         stepper->minPosition = doc["minPosition"].as<long>();
-      if (doc.containsKey("maxPosition"))
+        Serial.printf("  - Min position updated to %ld steps\n",
+                      stepper->minPosition);
+      }
+
+      if (doc.containsKey("maxPosition")) {
         stepper->maxPosition = doc["maxPosition"].as<long>();
-      if (doc.containsKey("stepsPerInch"))
+        Serial.printf("  - Max position updated to %ld steps\n",
+                      stepper->maxPosition);
+      }
+
+      if (doc.containsKey("stepsPerInch")) {
         stepper->stepsPerInch = doc["stepsPerInch"].as<float>();
+        Serial.printf("  - Steps per inch updated to %.2f\n",
+                      stepper->stepsPerInch);
+      }
+
+      // Update homing parameters
+      if (doc.containsKey("homeSensorId"))
+        stepper->homeSensorId = doc["homeSensorId"].as<String>();
+      if (doc.containsKey("homingDirection"))
+        stepper->homingDirection = doc["homingDirection"].as<int>();
+      if (doc.containsKey("homingSpeed"))
+        stepper->homingSpeed = doc["homingSpeed"].as<float>();
+      if (doc.containsKey("homeSensorPinActiveState"))
+        stepper->homeSensorPinActiveState =
+            doc["homeSensorPinActiveState"].as<int>();
+      if (doc.containsKey("homePositionOffset"))
+        stepper->homePositionOffset = doc["homePositionOffset"].as<long>();
 
       client->text(String(F("OK: Stepper params updated for ")) + id);
     } else if (strcmp(command, "move") == 0) {
       if (doc.containsKey("value")) {
-        long targetPos = clampPosition(stepper, doc["value"].as<long>());
+        long targetPos = doc["value"].as<long>();
 
-        // Store command ID if provided (for sequence tracking)
-        const char *commandId = nullptr;
-        if (doc.containsKey("commandId")) {
-          commandId = doc["commandId"];
-          stepper->pendingCommandId = commandId;
+        if (moveStepperToPosition(*stepper, targetPos)) {
+          char buffer[100];
+          snprintf(buffer, sizeof(buffer), "OK: Stepper %s moving to %ld",
+                   id.c_str(), targetPos);
+          client->text(buffer);
+        } else {
+          client->text(String(F("ERROR: Failed to move stepper ")) + id);
         }
-
-        // Set target and start movement
-        stepper->stepper->moveTo(targetPos);
-        stepper->targetPosition = targetPos;
-        stepper->isActionPending =
-            true;  // Mark that we need to notify on completion
-
-        // Generate response
-        char buffer[100];
-        snprintf(buffer, sizeof(buffer), "OK: Stepper %s moving to %ld",
-                 id.c_str(), targetPos);
-        client->text(buffer);
       } else {
         client->text(F("ERROR: Missing 'value' for move command"));
       }
     } else if (strcmp(command, "step") == 0) {
       if (doc.containsKey("value")) {
         long steps = doc["value"].as<long>();
-        long currentPos = stepper->stepper->getCurrentPosition();
-        long newPos = clampPosition(stepper, currentPos + steps);
-        steps = newPos - currentPos;  // Recalculate steps based on clamping
 
-        // Store command ID if provided (for sequence tracking)
-        const char *commandId = nullptr;
-        if (doc.containsKey("commandId")) {
-          commandId = doc["commandId"];
-          stepper->pendingCommandId = commandId;
-        }
-
-        if (steps != 0) {
-          stepper->stepper->move(steps);
-          stepper->targetPosition = newPos;
-          stepper->isActionPending =
-              true;  // Mark that we need to notify on completion
+        if (moveStepperRelative(*stepper, steps)) {
+          char buffer[128];
+          snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld",
+                   id.c_str(), steps);
+          client->text(buffer);
         } else {
           // If no actual movement due to clamping, send completion immediately
-          if (commandId) {
-            StaticJsonDocument<256> completionMsg;
-            completionMsg["type"] = "actionComplete";
-            completionMsg["componentId"] = id;
-            completionMsg["componentGroup"] = "steppers";
-            completionMsg["commandId"] = commandId;
-            completionMsg["success"] = true;
-
-            String completionJson;
-            serializeJson(completionMsg, completionJson);
-            ws.textAll(completionJson);
+          if (!stepper->pendingCommandId.isEmpty()) {
+            sendStepperActionComplete(*stepper, true);
+            stepper->pendingCommandId = "";
           }
+          client->text(String(F("OK: Stepper ")) + id +
+                       F(" at limit, no movement"));
         }
-
-        // Generate response
-        char buffer[128];
-        snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld to %ld",
-                 id.c_str(), steps, newPos);
-        client->text(buffer);
       } else {
         client->text(F("ERROR: Missing 'value' for step command"));
       }
     } else if (strcmp(command, "home") == 0) {
-      long homePos = (stepper->minPosition + stepper->maxPosition) / 2;
-      stepper->stepper->moveTo(homePos);
-      stepper->targetPosition = homePos;
-      char buffer[100];
-      snprintf(buffer, sizeof(buffer), "OK: Stepper %s homing to %ld",
-               id.c_str(), homePos);
-      client->text(buffer);
+      // Check if we have a home sensor configured
+      if (!stepper->homeSensorId.isEmpty()) {
+        Serial.printf("[StepperCard %s] Starting homing with sensor: %s\n",
+                      id.c_str(), stepper->homeSensorId.c_str());
+        // Use sensor-based homing
+        if (homeStepperWithSensor(*stepper)) {
+          client->text(String(F("OK: Stepper ")) + id +
+                       F(" homing with sensor"));
+        } else {
+          client->text(String(F("ERROR: Failed to start homing for stepper ")) +
+                       id);
+        }
+      } else {
+        // No sensor, just move to middle position
+        long homePos = (stepper->minPosition + stepper->maxPosition) / 2;
+        if (moveStepperToPosition(*stepper, homePos)) {
+          char buffer[100];
+          snprintf(buffer, sizeof(buffer), "OK: Stepper %s homing to %ld",
+                   id.c_str(), homePos);
+          client->text(buffer);
+        } else {
+          client->text(String(F("ERROR: Failed to home stepper ")) + id);
+        }
+      }
     } else if (strcmp(command, "stop") == 0) {
-      stepper->stepper->forceStop();
+      stopStepper(*stepper);
       client->text(String(F("OK: Stepper ")) + id + F(" emergency stop"));
     } else if (strcmp(command, "setCurrentPosition") == 0) {
       if (doc.containsKey("value")) {
         long newPosition = doc["value"].as<long>();
-        stepper->stepper->setCurrentPosition(newPosition);
-        // Also update our tracked positions to match the new logical position
-        stepper->currentPosition = newPosition;
-        stepper->targetPosition = newPosition;
-        stepper->isActionPending =
-            false;  // Ensure any pending action is cleared
-        stepper->pendingCommandId = "";
 
-        // Send confirmation response
-        char buffer[128];
-        snprintf(buffer, sizeof(buffer),
-                 "OK: Stepper %s current position set to %ld", id.c_str(),
-                 newPosition);
-        client->text(buffer);
-        Serial.printf("%s\n", buffer);
+        if (setStepperCurrentPosition(*stepper, newPosition)) {
+          char buffer[128];
+          snprintf(buffer, sizeof(buffer),
+                   "OK: Stepper %s current position set to %ld", id.c_str(),
+                   newPosition);
+          client->text(buffer);
 
-        // Send an immediate position update to UI
-        StaticJsonDocument<128> updateDoc;
-        updateDoc["id"] = stepper->id;
-        updateDoc["position"] = newPosition;
-        updateDoc["componentGroup"] = F("steppers");
-        String output;
-        serializeJson(updateDoc, output);
-        ws.textAll(output);
-
+          // Send an immediate position update to UI
+          sendStepperPositionUpdate(*stepper);
+        } else {
+          client->text(F("ERROR: Failed to set position for stepper ")) + id;
+        }
       } else {
         client->text(
             F("ERROR: Missing 'value' for setCurrentPosition command"));
@@ -657,11 +741,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         std::remove_if(configuredSteppers.begin(), configuredSteppers.end(),
                        [&](const StepperConfig &s) { return s.id == id; });
     if (it != configuredSteppers.end()) {
-      if (it->stepper) {
-        it->stepper->forceStop();
-        // engine.deleteStepper(it->stepper); // FastAccelStepper handles its
-        // own stepper objects
-      }
+      cleanupStepper(*it);  // Clean up before erasing
       configuredSteppers.erase(it, configuredSteppers.end());
       client->text(String(F("OK: Stepper removed: ")) + id);
     } else {
