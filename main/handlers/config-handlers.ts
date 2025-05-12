@@ -2,6 +2,10 @@ import { ipcMain } from "electron";
 import { getDb } from "../lib/mongodb"; // Corrected path: Use relative path from main process to renderer's lib
 import { Collection, ObjectId } from "mongodb";
 import { HardwareConfig, SavedConfigDocument } from "../../common/types"; // Correct import path
+import createLogger from "../lib/logger";
+
+// Create a logger for this module
+const logger = createLogger("ConfigHandlers");
 
 // Ensure this utility function can be called from the main process context.
 // The path '@/' might resolve differently in main vs. renderer.
@@ -34,11 +38,11 @@ async function handleGetConfigs() {
       )
       .sort({ updatedAt: -1 })
       .toArray();
-    console.log("[Main:handleGetConfigs] Fetched:", configs.length, "configs");
+    logger.info(`Fetched: ${configs.length} configs`);
     // Important: Convert ObjectId to string for IPC serialization
     return configs.map((c) => ({ ...c, _id: c._id.toHexString() }));
   } catch (error: any) {
-    console.error("[Main:handleGetConfigs] Error:", error);
+    logger.error("Error fetching configurations:", error);
     // Rethrow or return an error structure for the renderer to handle
     throw new Error(`Error fetching configurations: ${error.message}`);
     // Or: return { error: `Error fetching configurations: ${error.message}` };
@@ -96,13 +100,13 @@ async function handleCreateConfig(
       throw new Error("Failed to retrieve the newly created configuration.");
     }
 
-    console.log(
-      `[Main:handleCreateConfig] Created config '${trimmedName}' with ID: ${result.insertedId}`
+    logger.success(
+      `Created config '${trimmedName}' with ID: ${result.insertedId}`
     );
     // Convert ObjectId before sending back
     return { ...insertedDoc, _id: insertedDoc._id.toHexString() };
   } catch (error: any) {
-    console.error("[Main:handleCreateConfig] Error:", error);
+    logger.error("Error creating configuration:", error);
     // Rethrow or return an error structure
     throw new Error(`Error creating configuration: ${error.message}`);
     // Or: return { error: `Error creating configuration: ${error.message}` };
@@ -130,16 +134,11 @@ async function handleGetConfigById(
       throw new Error("Configuration not found"); // Or use a specific error code/type
     }
 
-    console.log(
-      `[Main:handleGetConfigById] Found config '${config.name}' for ID: ${configId}`
-    );
+    logger.info(`Found config '${config.name}' for ID: ${configId}`);
     // Convert ObjectId to string before sending
     return { ...config, _id: config._id.toHexString() };
   } catch (error: any) {
-    console.error(
-      `[Main:handleGetConfigById] Error fetching config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error fetching config ID ${configId}:`, error);
     throw new Error(`Error fetching configuration: ${error.message}`);
   }
 }
@@ -166,10 +165,7 @@ async function handleUpdateConfig(
   try {
     const collection = await getConfigurationsCollection();
 
-    console.log(
-      "[Main:handleUpdateConfig] Update payload:",
-      JSON.stringify(updatePayload, null, 2)
-    );
+    logger.debug("Update payload:", JSON.stringify(updatePayload, null, 2));
 
     // Construct the $set object dynamically from the payload
     const fieldsToUpdate: any = {};
@@ -208,8 +204,8 @@ async function handleUpdateConfig(
       // We can either throw an error, or proceed to just update 'updatedAt'.
       // For now, let's allow just updating 'updatedAt' if an otherwise empty payload is sent.
       // If the original payload was truly empty, the check at the start of the function would catch it.
-      console.warn(
-        `[Main:handleUpdateConfig] Update payload for ${configId} resulted in only updating 'updatedAt'. Original payload:`,
+      logger.warn(
+        `Update payload for ${configId} resulted in only updating 'updatedAt'. Original payload:`,
         updatePayload
       );
     }
@@ -232,10 +228,7 @@ async function handleUpdateConfig(
     }
     return { ...updatedDoc, _id: updatedDoc._id.toHexString() };
   } catch (error: any) {
-    console.error(
-      `[Main:handleUpdateConfig] Error updating config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error updating config ID ${configId}:`, error);
     throw new Error(`Error updating configuration: ${error.message}`);
   }
 }
@@ -258,13 +251,10 @@ async function handleDeleteConfig(
       throw new Error("Configuration not found");
     }
 
-    console.log(`[Main:handleDeleteConfig] Deleted config ID: ${configId}`);
+    logger.success(`Deleted config ID: ${configId}`);
     return { success: true, message: "Configuration deleted successfully" }; // Indicate success
   } catch (error: any) {
-    console.error(
-      `[Main:handleDeleteConfig] Error deleting config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error deleting config ID ${configId}:`, error);
     throw new Error(`Error deleting configuration: ${error.message}`);
   }
 }
@@ -310,15 +300,10 @@ async function handleRenameConfig(
       throw new Error("Configuration not found for renaming");
     }
 
-    console.log(
-      `[Main:handleRenameConfig] Renamed config ID ${configId} to '${trimmedNewName}'`
-    );
+    logger.success(`Renamed config ID ${configId} to '${trimmedNewName}'`);
     return { success: true, message: "Configuration renamed successfully" };
   } catch (error: any) {
-    console.error(
-      `[Main:handleRenameConfig] Error renaming config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error renaming config ID ${configId}:`, error);
     throw new Error(`Error renaming configuration: ${error.message}`);
   }
 }
@@ -351,16 +336,14 @@ async function handleUpdateDescription(
       throw new Error("Configuration not found");
     }
 
-    console.log(
-      `[Main:handleUpdateDescription] Updated description for config ID: ${configId}`
-    );
+    logger.success(`Updated description for config ID: ${configId}`);
     return {
       success: true,
       message: "Configuration description updated successfully",
     };
   } catch (error: any) {
-    console.error(
-      `[Main:handleUpdateDescription] Error updating description for config ID ${configId}:`,
+    logger.error(
+      `Error updating description for config ID ${configId}:`,
       error
     );
     throw new Error(
@@ -433,17 +416,14 @@ async function handleDuplicateConfig(
       throw new Error("Failed to retrieve the newly duplicated configuration.");
     }
 
-    console.log(
-      `[Main:handleDuplicateConfig] Duplicated config '${sourceConfig.name}' to '${finalName}' with ID: ${result.insertedId}`
+    logger.success(
+      `Duplicated config '${sourceConfig.name}' to '${finalName}' with ID: ${result.insertedId}`
     );
 
     // Convert ObjectId before sending back
     return { ...insertedDoc, _id: insertedDoc._id.toHexString() };
   } catch (error: any) {
-    console.error(
-      `[Main:handleDuplicateConfig] Error duplicating config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error duplicating config ID ${configId}:`, error);
     throw new Error(`Error duplicating configuration: ${error.message}`);
   }
 }
@@ -485,8 +465,8 @@ async function handleSaveSequenceToConfig(
         ...sequence, // Apply updates
         updatedAt: new Date().toISOString(), // Ensure updatedAt is fresh
       };
-      console.log(
-        `[Main:handleSaveSequenceToConfig] Updated sequence ID '${sequence.id}' in config ID '${configId}'`
+      logger.info(
+        `Updated sequence ID '${sequence.id}' in config ID '${configId}'`
       );
     } else {
       // Add new sequence
@@ -496,8 +476,8 @@ async function handleSaveSequenceToConfig(
         createdAt: sequence.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      console.log(
-        `[Main:handleSaveSequenceToConfig] Added new sequence ID '${sequence.id}' to config ID '${configId}'`
+      logger.success(
+        `Added new sequence ID '${sequence.id}' to config ID '${configId}'`
       );
     }
 
@@ -518,8 +498,8 @@ async function handleSaveSequenceToConfig(
     }
     if (updateResult.modifiedCount === 0) {
       // This might happen if the sequence data was identical, which is not an error.
-      console.log(
-        `[Main:handleSaveSequenceToConfig] Sequence data for '${sequence.id}' in config '${config.name}' was unchanged or save was trivial.`
+      logger.info(
+        `Sequence data for '${sequence.id}' in config '${config.name}' was unchanged or save was trivial.`
       );
     }
 
@@ -536,10 +516,7 @@ async function handleSaveSequenceToConfig(
       sequence: savedOrUpdatedSequence, // Return the sequence as it is in the DB
     };
   } catch (error: any) {
-    console.error(
-      `[Main:handleSaveSequenceToConfig] Error saving sequence to config ID ${configId}:`,
-      error
-    );
+    logger.error(`Error saving sequence to config ID ${configId}:`, error);
     throw new Error(`Error saving sequence to configuration: ${error.message}`);
   }
 }

@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { ConnectionStatus } from "./configStore";
+
+// Connection Status Type
+export type ConnectionStatus =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "fetchingIp";
 
 interface WSStore {
   // Connection status
@@ -13,7 +20,6 @@ interface WSStore {
   sendMessage: (message: object) => Promise<boolean>;
   connectToDevice: (ipOctet: string) => Promise<boolean>;
   disconnectFromDevice: () => void;
-  syncConfigWithDevice: (hardwareConfig: any) => void;
 
   // Status setters
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -120,128 +126,6 @@ export const useWSStore = create<WSStore>()(
           state.errorMessage = "Error trying to disconnect from device.";
         });
       }
-    },
-
-    syncConfigWithDevice: (hardwareConfig) => {
-      if (get().connectionStatus !== "connected") {
-        console.warn("[WSStore] Cannot sync config: Not connected.");
-        set((state) => {
-          state.errorMessage =
-            "Cannot sync configuration: Not connected to device.";
-        });
-        return;
-      }
-
-      set((state) => {
-        state.infoMessage = "Syncing configuration with device...";
-      });
-
-      console.log("[WSStore] Syncing configuration with device...");
-
-      const allComponents = Object.values(hardwareConfig).flat();
-
-      if (allComponents.length === 0) {
-        console.log(
-          "[WSStore] No components in the current configuration to sync."
-        );
-        set((state) => {
-          state.infoMessage = "Sync complete (No components).";
-        });
-        return;
-      }
-
-      const componentGroups = [
-        "servos",
-        "steppers",
-        "sensors",
-        "relays",
-        "pins",
-      ] as const;
-
-      componentGroups.forEach((group) => {
-        // Add safety check to ensure the group exists and is an array
-        if (Array.isArray(hardwareConfig[group])) {
-          hardwareConfig[group].forEach((component: any) => {
-            let configPayload: any = { id: component.id, name: component.name };
-
-            switch (group) {
-              case "servos":
-                configPayload.pin = component.pins[0];
-                if (component.minAngle !== undefined)
-                  configPayload.minAngle = component.minAngle;
-                if (component.maxAngle !== undefined)
-                  configPayload.maxAngle = component.maxAngle;
-                break;
-              case "steppers":
-                configPayload.pulPin = component.pins[0];
-                configPayload.dirPin = component.pins[1];
-                if (component.pins.length > 2 && component.pins[2] != null)
-                  configPayload.enaPin = component.pins[2];
-                if (component.maxSpeed !== undefined)
-                  configPayload.maxSpeed = component.maxSpeed;
-                if (component.acceleration !== undefined)
-                  configPayload.acceleration = component.acceleration;
-                break;
-              case "sensors":
-                configPayload.type = component.type;
-                configPayload.pins = component.pins;
-                break;
-              case "relays":
-                configPayload.pin = component.pins[0];
-                configPayload.type = component.type;
-                break;
-              case "pins":
-                configPayload.pin = component.pins[0];
-                configPayload.type = component.type;
-                if (component.pullMode !== undefined)
-                  configPayload.pullMode = component.pullMode;
-                if (component.debounceMs !== undefined)
-                  configPayload.debounceMs = component.debounceMs;
-
-                // Extract mode and pin type from the type field (e.g., "digital_input" -> mode="input", pinType="digital")
-                if (component.type && component.type.includes("_")) {
-                  const [pinType, mode] = component.type.split("_");
-                  configPayload.mode = mode;
-                  configPayload.pinType = pinType;
-                }
-                break;
-            }
-
-            try {
-              console.log(
-                `[WSStore] Sync: Sending configure for ${String(group)}: ${
-                  component.name
-                } (ID: ${component.id})`
-              );
-
-              // Use the sendMessage function
-              get().sendMessage({
-                action: "configure",
-                componentGroup: group,
-                config: configPayload,
-              });
-            } catch (error) {
-              console.error(
-                `[WSStore] Failed to send config for ${component.id}:`,
-                error
-              );
-            }
-          });
-        } else {
-          console.warn(
-            `[WSStore] Hardware config group '${String(
-              group
-            )}' is not an array or is missing. Skipping sync for this group.`
-          );
-        }
-      });
-
-      console.log(
-        "[WSStore] Finished sending initial configuration sync to device."
-      );
-      set((state) => {
-        state.infoMessage = "Sync complete!";
-      });
     },
 
     // Status setters

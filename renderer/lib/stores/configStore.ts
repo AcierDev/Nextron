@@ -4,7 +4,14 @@ import {
   HardwareConfig,
   FullConfigDataIPC,
   SavedConfigDocument,
+  ConfiguredComponent,
+  StepperComponentConfig,
+  ServoComponentConfig,
+  IoPinComponentConfig,
+  AnyComponentConfig,
 } from "../../../common/types";
+
+import { useWSStore } from "./wsStore";
 
 // Define the initial empty hardware config
 const initialHardwareConfig: HardwareConfig = {
@@ -90,14 +97,6 @@ export interface ComponentStates {
   [componentId: string]: number | boolean | string | undefined;
 }
 
-// Connection Status Type
-export type ConnectionStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "error"
-  | "fetchingIp";
-
 // Define the combined store state
 interface ConfigState {
   // Configurations list
@@ -122,8 +121,6 @@ interface ConfigState {
   componentStates: ComponentStates;
   isNewComponentDialogOpen: boolean;
 
-  // Connection state
-  connectionStatus: ConnectionStatus;
   lastIpOctet: string;
 
   // Messages
@@ -134,7 +131,7 @@ interface ConfigState {
   fetchConfigurations: () => Promise<void>;
   setErrorMessage: (message: string | null) => void;
   setInfoMessage: (message: string | null) => void;
-  loadConfiguration: (configId: string) => Promise<void>;
+  loadConfiguration: (configId: string) => Promise<{ shouldSync: boolean }>;
   saveConfiguration: () => Promise<boolean | undefined>;
   createConfiguration: (
     name: string,
@@ -149,13 +146,20 @@ interface ConfigState {
   duplicateConfiguration: (configId: string) => Promise<string | null>;
   updateHardwareConfig: (updatedConfig: Partial<HardwareConfig>) => void;
   resetCurrentConfig: () => void;
+  syncConfigWithDevice: (
+    sendMessageFn: (message: object) => Promise<boolean>
+  ) => void;
+  createComponent: (
+    componentData: any,
+    sendMessageFn: (message: object) => Promise<boolean>
+  ) => void;
 }
 
 // Define the store actions
 interface ConfigActions {
   // Configuration actions
   fetchConfigurations: () => Promise<void>;
-  loadConfiguration: (configId: string) => Promise<void>;
+  loadConfiguration: (configId: string) => Promise<{ shouldSync: boolean }>;
   saveConfiguration: () => Promise<boolean | undefined>;
   createConfiguration: (
     name: string,
@@ -210,12 +214,18 @@ interface ConfigActions {
   transformHardwareToComponents: (
     hwConfig: HardwareConfig
   ) => ComponentDisplay[];
+  syncConfigWithDevice: (
+    sendMessageFn: (message: object) => Promise<boolean>
+  ) => void;
+  createComponent: (
+    componentData: any,
+    sendMessageFn: (message: object) => Promise<boolean>
+  ) => void;
 
   // UI actions
   setNewComponentDialogOpen: (isOpen: boolean) => void;
 
   // Connection actions
-  setConnectionStatus: (status: ConnectionStatus) => void;
   setLastIpOctet: (octet: string) => void;
 
   // Message actions
@@ -343,6 +353,22 @@ export const useConfigStore = create<ConfigState & ConfigActions>()(
 
         // Transform hardware to components internally
         get().transformHardwareToComponents(normalizedHardware);
+
+        // Check if we should sync with the device
+        const connectionStatus = useWSStore.getState().connectionStatus;
+        if (connectionStatus === "connected") {
+          console.log(
+            "[ConfigStore] Connection active, will attempt to sync configuration with device"
+          );
+          // We'll need to call syncConfigWithDevice from outside since we need the sendMessage function
+          return { shouldSync: true };
+        }
+        console.log(
+          "[ConfigStore] Connection not active, will not sync configuration with device"
+        );
+        console.log(connectionStatus);
+
+        return { shouldSync: false };
       } catch (error) {
         console.error("[ConfigStore] Error loading configuration:", error);
         set((state) => {
@@ -358,6 +384,8 @@ export const useConfigStore = create<ConfigState & ConfigActions>()(
           state.components = [];
           state.componentStates = {};
         });
+
+        return { shouldSync: false };
       }
     },
 
@@ -1092,13 +1120,6 @@ export const useConfigStore = create<ConfigState & ConfigActions>()(
       });
     },
 
-    // Connection actions
-    setConnectionStatus: (status) => {
-      set((state) => {
-        state.connectionStatus = status;
-      });
-    },
-
     setLastIpOctet: (octet) => {
       set((state) => {
         state.lastIpOctet = octet;
@@ -1125,6 +1146,349 @@ export const useConfigStore = create<ConfigState & ConfigActions>()(
         state.componentStates = {};
         state.isNewComponentDialogOpen = false;
       });
+    },
+
+    // New actions
+    syncConfigWithDevice: (sendMessageFn) => {
+      const { hardwareConfig } = get();
+      const { setInfoMessage, setErrorMessage } = get();
+
+      if (useWSStore.getState().connectionStatus !== "connected") {
+        console.warn("[ConfigStore] Cannot sync config: Not connected.");
+        setErrorMessage("Cannot sync configuration: Not connected to device.");
+        return;
+      }
+
+      setInfoMessage("Syncing configuration with device...");
+      console.log("[ConfigStore] Syncing configuration with device...");
+
+      const allComponents = Object.values(hardwareConfig).flat();
+
+      if (allComponents.length === 0) {
+        console.log(
+          "[ConfigStore] No components in the current configuration to sync."
+        );
+        setInfoMessage("Sync complete (No components).");
+        return;
+      }
+
+      const componentGroups = [
+        "servos",
+        "steppers",
+        "sensors",
+        "relays",
+        "pins",
+      ] as const;
+
+      componentGroups.forEach((group) => {
+        // Add safety check to ensure the group exists and is an array
+        if (Array.isArray(hardwareConfig[group])) {
+          hardwareConfig[group].forEach((component: any) => {
+            let configPayload: any = { id: component.id, name: component.name };
+
+            switch (group) {
+              case "servos":
+                configPayload.pin = component.pins[0];
+                if (component.minAngle !== undefined)
+                  configPayload.minAngle = component.minAngle;
+                if (component.maxAngle !== undefined)
+                  configPayload.maxAngle = component.maxAngle;
+                break;
+              case "steppers":
+                configPayload.pulPin = component.pins[0];
+                configPayload.dirPin = component.pins[1];
+                if (component.pins.length > 2 && component.pins[2] != null)
+                  configPayload.enaPin = component.pins[2];
+                if (component.maxSpeed !== undefined)
+                  configPayload.maxSpeed = component.maxSpeed;
+                if (component.acceleration !== undefined)
+                  configPayload.acceleration = component.acceleration;
+                break;
+              case "sensors":
+                configPayload.type = component.type;
+                configPayload.pins = component.pins;
+                break;
+              case "relays":
+                configPayload.pin = component.pins[0];
+                configPayload.type = component.type;
+                break;
+              case "pins":
+                configPayload.pin = component.pins[0];
+                configPayload.type = component.type;
+                if (component.pullMode !== undefined)
+                  configPayload.pullMode = component.pullMode;
+                if (component.debounceMs !== undefined)
+                  configPayload.debounceMs = component.debounceMs;
+
+                // Extract mode and pin type from the type field (e.g., "digital_input" -> mode="input", pinType="digital")
+                if (component.type && component.type.includes("_")) {
+                  const [pinType, mode] = component.type.split("_");
+                  configPayload.mode = mode;
+                  configPayload.pinType = pinType;
+                }
+                break;
+            }
+
+            try {
+              console.log(
+                `[ConfigStore] Sync: Sending configure for ${String(group)}: ${
+                  component.name
+                } (ID: ${component.id})`
+              );
+
+              // Use the provided sendMessage function
+              sendMessageFn({
+                action: "configure",
+                componentGroup: group,
+                config: configPayload,
+              });
+            } catch (error) {
+              console.error(
+                `[ConfigStore] Failed to send config for ${component.id}:`,
+                error
+              );
+            }
+          });
+        } else {
+          console.warn(
+            `[ConfigStore] Hardware config group '${String(
+              group
+            )}' is not an array or is missing. Skipping sync for this group.`
+          );
+        }
+      });
+
+      console.log(
+        "[ConfigStore] Finished sending initial configuration sync to device."
+      );
+      setInfoMessage("Sync complete!");
+    },
+
+    createComponent: (componentData, sendMessageFn) => {
+      const { addComponent, updateHardwareConfig, setInfoMessage } = get();
+      const { hardwareConfig } = get();
+
+      const newId = `${componentData.type}-${Date.now()}`;
+      let newComponentDisplay: ComponentDisplay;
+      let newComponentConfig: AnyComponentConfig;
+      let configPayload: any = { id: newId, name: componentData.name };
+      let componentGroup: keyof HardwareConfig;
+
+      if (componentData.type === "stepper") {
+        componentGroup = "steppers";
+        const pins = [componentData.pins.step, componentData.pins.direction];
+        if (componentData.pins.enable) pins.push(componentData.pins.enable);
+
+        // Create stepper display component
+        newComponentDisplay = {
+          id: newId,
+          type: "stepper",
+          name: componentData.name,
+          position: 0,
+          speed: 1000,
+          acceleration: 500,
+          stepsPerInch: 2000,
+          minPosition: -50000,
+          maxPosition: 50000,
+          pins: {
+            step: componentData.pins.step,
+            direction: componentData.pins.direction,
+            enable: componentData.pins.enable,
+          },
+          initialJogUnit: "steps",
+          initialJogAmount: 200,
+          initialJogAmountInches: 0.1,
+          initialHomeSensorId: null,
+          initialHomingDirection: 1,
+          initialHomingSpeed: 1000,
+          initialHomeSensorPinActiveState: 0,
+          initialHomePositionOffset: 0,
+        };
+
+        // Create stepper config component
+        newComponentConfig = {
+          id: newId,
+          name: componentData.name,
+          componentType: "Stepper", // Use componentType instead of type
+          pulPin: componentData.pins.step,
+          dirPin: componentData.pins.direction,
+          enaPin: componentData.pins.enable,
+          maxSpeed: 1000,
+          acceleration: 500,
+          stepsPerInch: 2000,
+          minPosition: -50000,
+          maxPosition: 50000,
+          jogUnit: "steps",
+          jogAmount: 200,
+          jogAmountInches: 0.1,
+          homeSensorId: null,
+          homingDirection: 1,
+          homingSpeed: 1000,
+          homeSensorPinActiveState: 0,
+          homePositionOffset: 0,
+        } as StepperComponentConfig;
+
+        configPayload.pulPin = componentData.pins.step;
+        configPayload.dirPin = componentData.pins.direction;
+        if (componentData.pins.enable)
+          configPayload.enaPin = componentData.pins.enable;
+        configPayload.maxSpeed = 1000;
+        configPayload.acceleration = 500;
+      } else if (componentData.type === "servo") {
+        componentGroup = "servos";
+        newComponentDisplay = {
+          id: newId,
+          type: "servo",
+          name: componentData.name,
+          angle: 90,
+          minAngle: 0,
+          maxAngle: 180,
+          pins: { control: componentData.pins.control },
+          initialPresets: [0, 45, 90, 135, 180],
+          initialSpeed: 100,
+        };
+
+        newComponentConfig = {
+          id: newId,
+          name: componentData.name,
+          componentType: "Servo",
+          pin: componentData.pins.control,
+          minAngle: 0,
+          maxAngle: 180,
+          presets: [0, 45, 90, 135, 180],
+          speed: 100,
+        } as ServoComponentConfig;
+
+        configPayload.pin = componentData.pins.control;
+        configPayload.minAngle = 0;
+        configPayload.maxAngle = 180;
+      } else {
+        // IO Pin
+        componentGroup = "pins";
+        const mode = componentData.pins.mode;
+        const pinType = componentData.pins.type;
+        newComponentDisplay = {
+          id: newId,
+          type: "digital", // Display type is always digital for IOPinCard
+          name: componentData.name,
+          pinNumber: componentData.pins.pin,
+          mode: mode,
+          pinType: pinType,
+          value:
+            mode === "input"
+              ? 0
+              : pinType === "digital"
+              ? 0
+              : pinType === "analog"
+              ? 512
+              : 128,
+          pullMode: 1,
+          debounceMs: 50,
+        };
+
+        newComponentConfig = {
+          id: newId,
+          name: componentData.name,
+          componentType: "IoPin",
+          pin: componentData.pins.pin,
+          pinType: pinType,
+          mode: mode,
+          pullMode: 1,
+          debounceMs: 50,
+        } as IoPinComponentConfig;
+
+        configPayload.pin = componentData.pins.pin;
+        configPayload.mode = mode;
+        configPayload.pinType = pinType;
+        configPayload.pullMode = 1;
+        configPayload.debounceMs = 50;
+      }
+
+      // Add the component to the display store
+      addComponent(newComponentDisplay);
+
+      // Update the hardware config in the config store
+      const updatedHardware = { ...hardwareConfig };
+
+      if (componentData.type === "stepper") {
+        const stepperConfig = newComponentConfig as StepperComponentConfig;
+        // Convert to ConfiguredComponent for hardware config
+        const configuredComponent: ConfiguredComponent = {
+          id: stepperConfig.id,
+          name: stepperConfig.name,
+          type: "Stepper",
+          pins: [
+            stepperConfig.pulPin,
+            stepperConfig.dirPin,
+            stepperConfig.enaPin,
+          ].filter((pin) => pin !== undefined) as number[],
+          maxSpeed: stepperConfig.maxSpeed,
+          acceleration: stepperConfig.acceleration,
+          stepsPerInch: stepperConfig.stepsPerInch,
+          minPosition: stepperConfig.minPosition,
+          maxPosition: stepperConfig.maxPosition,
+          jogUnit: stepperConfig.jogUnit,
+          jogAmount: stepperConfig.jogAmount,
+          jogAmountInches: stepperConfig.jogAmountInches,
+          homeSensorId: stepperConfig.homeSensorId,
+          homingDirection: stepperConfig.homingDirection,
+          homingSpeed: stepperConfig.homingSpeed,
+          homeSensorPinActiveState: stepperConfig.homeSensorPinActiveState,
+          homePositionOffset: stepperConfig.homePositionOffset,
+        };
+        updatedHardware[componentGroup] = [
+          ...updatedHardware[componentGroup],
+          configuredComponent,
+        ];
+      } else if (componentData.type === "servo") {
+        const servoConfig = newComponentConfig as ServoComponentConfig;
+        // Convert to ConfiguredComponent for hardware config
+        const configuredComponent: ConfiguredComponent = {
+          id: servoConfig.id,
+          name: servoConfig.name,
+          type: "Servo",
+          pins: [servoConfig.pin],
+          minAngle: servoConfig.minAngle,
+          maxAngle: servoConfig.maxAngle,
+          presets: servoConfig.presets,
+          speed: servoConfig.speed,
+        };
+        updatedHardware[componentGroup] = [
+          ...updatedHardware[componentGroup],
+          configuredComponent,
+        ];
+      } else {
+        // IO Pin
+        const pinConfig = newComponentConfig as IoPinComponentConfig;
+        // Convert to ConfiguredComponent for hardware config
+        const configuredComponent: ConfiguredComponent = {
+          id: pinConfig.id,
+          name: pinConfig.name,
+          type: `${pinConfig.pinType}_${pinConfig.mode}`, // Use the format expected by the system
+          pins: [pinConfig.pin],
+          pullMode: pinConfig.pullMode,
+          debounceMs: pinConfig.debounceMs,
+        };
+        updatedHardware[componentGroup] = [
+          ...updatedHardware[componentGroup],
+          configuredComponent,
+        ];
+      }
+
+      updateHardwareConfig(updatedHardware);
+
+      // Send message to configure on the ESP32
+      sendMessageFn({
+        action: "configure",
+        componentGroup: componentGroup,
+        config: configPayload,
+      });
+
+      setInfoMessage(
+        `${
+          componentData.type === "digital" ? "IO Pin" : "Motor"
+        } added. Remember to Save Configuration.`
+      );
     },
   }))
 );

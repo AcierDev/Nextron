@@ -71,7 +71,6 @@ export default function Dashboard() {
     errorMessage: wsErrorMessage,
     infoMessage: wsInfoMessage,
     sendMessage,
-    syncConfigWithDevice,
     setConnectionStatus: setWSConnectionStatus, // Renamed to avoid conflict
     setLastIpOctet: setWSLastIpOctet, // Renamed to avoid conflict
     setErrorMessage: setWSErrorMessage,
@@ -80,9 +79,6 @@ export default function Dashboard() {
 
   // Reference to WebSocket for cleanup
   const ws = useRef<WebSocket | null>(null);
-
-  // Reference to track if we've already synced with the device
-  const hasSyncedRef = useRef<boolean>(false);
 
   // Get the effective error and info messages to display
   const errorMessage = configErrorMessage || wsErrorMessage;
@@ -98,13 +94,33 @@ export default function Dashboard() {
       router.push("/configurations");
       return;
     }
-    loadConfiguration(configId);
+
+    async function loadAndSync() {
+      try {
+        // Load the configuration and check if we should sync
+        const result = await loadConfiguration(configId);
+
+        // If the config was loaded successfully and we're connected, sync with the device
+        if (result.shouldSync && connectionStatus === "connected") {
+          console.log(
+            "Dashboard: Config loaded and connection active, performing initial sync"
+          );
+          useConfigStore.getState().syncConfigWithDevice(sendMessage);
+        }
+      } catch (error) {
+        console.error("Error loading or syncing configuration:", error);
+      }
+    }
+
+    loadAndSync();
   }, [
     configId,
     router,
     loadConfiguration,
     setConfigErrorMessage,
     resetComponentState,
+    connectionStatus,
+    sendMessage,
   ]);
 
   // Auto clear messages
@@ -218,14 +234,7 @@ export default function Dashboard() {
           setWSLastIpOctet(connectionData.ipOctet || "");
           window.ipc.invoke("keep-connection-alive");
 
-          // Only sync if the config is loaded and we haven't synced yet
-          if (currentConfig.isLoaded && !hasSyncedRef.current) {
-            console.log(
-              "Dashboard: Config loaded and connection active, performing initial sync."
-            );
-            syncConfigWithDevice(hardwareConfig);
-            hasSyncedRef.current = true;
-          }
+          // Sync is now handled by the configStore when loading a configuration
         } else if (connectionData && connectionData.stale) {
           setWSConnectionStatus("error");
           setWSLastIpOctet(connectionData.ipOctet || "");
@@ -266,12 +275,13 @@ export default function Dashboard() {
   }, [
     router,
     connectionStatus, // Re-evaluate if connection status changes
-    syncConfigWithDevice,
     updateComponentState,
     setWSErrorMessage,
     setConfigInfoMessage,
     setWSConnectionStatus,
     setWSLastIpOctet,
+    currentConfig.isLoaded, // Re-evaluate when config is loaded
+    sendMessage, // Need sendMessage for syncConfigWithDevice
   ]);
 
   // Add WebSocket cleanup effect
@@ -1045,230 +1055,8 @@ export default function Dashboard() {
         open={isNewComponentDialogOpen}
         onOpenChange={setNewComponentDialogOpen}
         onCreateComponent={(componentData) => {
-          const newId = `${componentData.type}-${Date.now()}`;
-          let newComponentDisplay: ComponentDisplay;
-          let newComponentConfig: AnyComponentConfig;
-          let configPayload: any = { id: newId, name: componentData.name };
-          let componentGroup: keyof HardwareConfig;
-
-          if (componentData.type === "stepper") {
-            componentGroup = "steppers";
-            const pins = [
-              componentData.pins.step,
-              componentData.pins.direction,
-            ];
-            if (componentData.pins.enable) pins.push(componentData.pins.enable);
-
-            // Create stepper display component
-            newComponentDisplay = {
-              id: newId,
-              type: "stepper",
-              name: componentData.name,
-              position: 0,
-              speed: 1000,
-              acceleration: 500,
-              stepsPerInch: 2000,
-              minPosition: -50000,
-              maxPosition: 50000,
-              pins: {
-                step: componentData.pins.step,
-                direction: componentData.pins.direction,
-                enable: componentData.pins.enable,
-              },
-              initialJogUnit: "steps",
-              initialJogAmount: 200,
-              initialJogAmountInches: 0.1,
-              initialHomeSensorId: null,
-              initialHomingDirection: 1,
-              initialHomingSpeed: 1000,
-              initialHomeSensorPinActiveState: 0,
-              initialHomePositionOffset: 0,
-            };
-
-            // Create stepper config component
-            newComponentConfig = {
-              id: newId,
-              name: componentData.name,
-              componentType: "Stepper", // Use componentType instead of type
-              pulPin: componentData.pins.step,
-              dirPin: componentData.pins.direction,
-              enaPin: componentData.pins.enable,
-              maxSpeed: 1000,
-              acceleration: 500,
-              stepsPerInch: 2000,
-              minPosition: -50000,
-              maxPosition: 50000,
-              jogUnit: "steps",
-              jogAmount: 200,
-              jogAmountInches: 0.1,
-              homeSensorId: null,
-              homingDirection: 1,
-              homingSpeed: 1000,
-              homeSensorPinActiveState: 0,
-              homePositionOffset: 0,
-            } as StepperComponentConfig;
-
-            configPayload.pulPin = componentData.pins.step;
-            configPayload.dirPin = componentData.pins.direction;
-            if (componentData.pins.enable)
-              configPayload.enaPin = componentData.pins.enable;
-            configPayload.maxSpeed = 1000;
-            configPayload.acceleration = 500;
-          } else if (componentData.type === "servo") {
-            componentGroup = "servos";
-            newComponentDisplay = {
-              id: newId,
-              type: "servo",
-              name: componentData.name,
-              angle: 90,
-              minAngle: 0,
-              maxAngle: 180,
-              pins: { control: componentData.pins.control },
-              initialPresets: [0, 45, 90, 135, 180],
-              initialSpeed: 100,
-            };
-
-            newComponentConfig = {
-              id: newId,
-              name: componentData.name,
-              componentType: "Servo",
-              pin: componentData.pins.control,
-              minAngle: 0,
-              maxAngle: 180,
-              presets: [0, 45, 90, 135, 180],
-              speed: 100,
-            } as ServoComponentConfig;
-
-            configPayload.pin = componentData.pins.control;
-            configPayload.minAngle = 0;
-            configPayload.maxAngle = 180;
-          } else {
-            // IO Pin
-            componentGroup = "pins";
-            const mode = componentData.pins.mode;
-            const pinType = componentData.pins.type;
-            newComponentDisplay = {
-              id: newId,
-              type: "digital", // Display type is always digital for IOPinCard
-              name: componentData.name,
-              pinNumber: componentData.pins.pin,
-              mode: mode,
-              pinType: pinType,
-              value:
-                mode === "input"
-                  ? 0
-                  : pinType === "digital"
-                  ? 0
-                  : pinType === "analog"
-                  ? 512
-                  : 128,
-              pullMode: 1,
-              debounceMs: 50,
-            };
-
-            newComponentConfig = {
-              id: newId,
-              name: componentData.name,
-              componentType: "IoPin",
-              pin: componentData.pins.pin,
-              pinType: pinType,
-              mode: mode,
-              pullMode: 1,
-              debounceMs: 50,
-            } as IoPinComponentConfig;
-
-            configPayload.pin = componentData.pins.pin;
-            configPayload.mode = mode;
-            configPayload.pinType = pinType;
-            configPayload.pullMode = 1;
-            configPayload.debounceMs = 50;
-          }
-
-          // Add the component to the display store
-          addComponentToDisplay(newComponentDisplay);
-
-          // Update the hardware config in the config store
-          const updatedHardware = { ...hardwareConfig };
-
-          if (componentData.type === "stepper") {
-            const stepperConfig = newComponentConfig as StepperComponentConfig;
-            // Convert to ConfiguredComponent for hardware config
-            const configuredComponent: ConfiguredComponent = {
-              id: stepperConfig.id,
-              name: stepperConfig.name,
-              type: "Stepper",
-              pins: [
-                stepperConfig.pulPin,
-                stepperConfig.dirPin,
-                stepperConfig.enaPin,
-              ].filter((pin) => pin !== undefined) as number[],
-              maxSpeed: stepperConfig.maxSpeed,
-              acceleration: stepperConfig.acceleration,
-              stepsPerInch: stepperConfig.stepsPerInch,
-              minPosition: stepperConfig.minPosition,
-              maxPosition: stepperConfig.maxPosition,
-              jogUnit: stepperConfig.jogUnit,
-              jogAmount: stepperConfig.jogAmount,
-              jogAmountInches: stepperConfig.jogAmountInches,
-              homeSensorId: stepperConfig.homeSensorId,
-              homingDirection: stepperConfig.homingDirection,
-              homingSpeed: stepperConfig.homingSpeed,
-              homeSensorPinActiveState: stepperConfig.homeSensorPinActiveState,
-              homePositionOffset: stepperConfig.homePositionOffset,
-            };
-            updatedHardware[componentGroup] = [
-              ...updatedHardware[componentGroup],
-              configuredComponent,
-            ];
-          } else if (componentData.type === "servo") {
-            const servoConfig = newComponentConfig as ServoComponentConfig;
-            // Convert to ConfiguredComponent for hardware config
-            const configuredComponent: ConfiguredComponent = {
-              id: servoConfig.id,
-              name: servoConfig.name,
-              type: "Servo",
-              pins: [servoConfig.pin],
-              minAngle: servoConfig.minAngle,
-              maxAngle: servoConfig.maxAngle,
-              presets: servoConfig.presets,
-              speed: servoConfig.speed,
-            };
-            updatedHardware[componentGroup] = [
-              ...updatedHardware[componentGroup],
-              configuredComponent,
-            ];
-          } else {
-            // IO Pin
-            const pinConfig = newComponentConfig as IoPinComponentConfig;
-            // Convert to ConfiguredComponent for hardware config
-            const configuredComponent: ConfiguredComponent = {
-              id: pinConfig.id,
-              name: pinConfig.name,
-              type: `${pinConfig.pinType}_${pinConfig.mode}`, // Use the format expected by the system
-              pins: [pinConfig.pin],
-              pullMode: pinConfig.pullMode,
-              debounceMs: pinConfig.debounceMs,
-            };
-            updatedHardware[componentGroup] = [
-              ...updatedHardware[componentGroup],
-              configuredComponent,
-            ];
-          }
-
-          updateHardwareConfig(updatedHardware);
-
-          // Send message to configure on the ESP32
-          sendMessage({
-            action: "configure",
-            componentGroup: componentGroup,
-            config: configPayload,
-          });
-
-          setConfigInfoMessage(
-            `${
-              componentData.type === "digital" ? "IO Pin" : "Motor"
-            } added. Remember to Save Configuration.`
-          );
+          // Use the configStore's createComponent method
+          useConfigStore.getState().createComponent(componentData, sendMessage);
         }}
       />
 
