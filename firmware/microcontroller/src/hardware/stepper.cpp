@@ -48,14 +48,14 @@ bool initializeStepper(StepperConfig& config) {
   config.isHoming = false;
   config.pendingCommandId = "";
 
-  Serial.printf("Stepper '%s' initialized:\n", config.name.c_str());
-  Serial.printf("  - Pins: PUL=%d, DIR=%d, ENA=%d\n", config.pulPin,
-                config.dirPin, config.enaPin);
-  Serial.printf("  - Speed: %.2f steps/sec\n", config.maxSpeed);
-  Serial.printf("  - Acceleration: %.2f steps/sec²\n", config.acceleration);
-  Serial.printf("  - Position Range: %ld to %ld steps\n", config.minPosition,
-                config.maxPosition);
-  Serial.printf("  - Steps per inch: %.2f\n", config.stepsPerInch);
+  // Serial.printf("Stepper '%s' initialized:\n", config.name.c_str());
+  // Serial.printf("  - Pins: PUL=%d, DIR=%d, ENA=%d\n", config.pulPin,
+  //               config.dirPin, config.enaPin);
+  // Serial.printf("  - Speed: %.2f steps/sec\n", config.maxSpeed);
+  // Serial.printf("  - Acceleration: %.2f steps/sec²\n", config.acceleration);
+  // Serial.printf("  - Position Range: %ld to %ld steps\n", config.minPosition,
+  //               config.maxPosition);
+  // Serial.printf("  - Steps per inch: %.2f\n", config.stepsPerInch);
 
   return true;
 }

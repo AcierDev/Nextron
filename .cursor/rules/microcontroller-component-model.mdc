@@ -31,7 +31,6 @@ struct ServoConfig {
   String name;             // Display name
   uint8_t pin;             // GPIO pin number
   int channel;             // LEDC channel
-  bool isAttached;         // Whether servo is active
   int minAngle;            // Minimum angle (degrees)
   int maxAngle;            // Maximum angle (degrees)
   int minPulseWidth;       // Min pulse width (μs)

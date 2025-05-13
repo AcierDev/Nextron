@@ -18,6 +18,10 @@ std::vector<ServoConfig> configuredServos;
 std::vector<StepperConfig> configuredSteppers;
 std::map<String, unsigned long> lastPinReadTime;
 
+// --- Servo Channel Tracking ---
+bool servoChannelUsed[MAX_SERVO_CHANNELS] = {
+    false};  // All channels initially free
+
 // --- Helper Functions ---
 IoPinConfig *findPinById(const String &id) {
   for (auto &pinConfig : configuredPins) {
@@ -27,10 +31,6 @@ IoPinConfig *findPinById(const String &id) {
 }
 
 ServoConfig *findServoById(const String &id) {
-  Serial.printf("DEBUG: findServoById called for id='%s'\n", id.c_str());
-  Serial.printf("DEBUG: Searching through %d configured servos\n",
-                configuredServos.size());
-
   if (configuredServos.empty()) {
     Serial.println("DEBUG: No servos configured yet!");
     return nullptr;
@@ -38,11 +38,8 @@ ServoConfig *findServoById(const String &id) {
 
   for (size_t i = 0; i < configuredServos.size(); i++) {
     auto &servoConfig = configuredServos[i];
-    Serial.printf("DEBUG: Comparing with servo[%d] id='%s'\n", i,
-                  servoConfig.id.c_str());
 
     if (servoConfig.id == id) {
-      Serial.printf("DEBUG: Found matching servo at index %d\n", i);
       return &servoConfig;
     }
   }
@@ -60,4 +57,28 @@ StepperConfig *findStepperById(const String &id) {
     }
   }
   return nullptr;
+}
+
+// Allocate a free servo channel
+int allocateServoChannel() {
+  // First, try to find a free channel
+  for (int i = 0; i < MAX_SERVO_CHANNELS; i++) {
+    if (!servoChannelUsed[i]) {
+      servoChannelUsed[i] = true;
+      Serial.printf("DEBUG: Allocated servo channel %d\n", i);
+      return i;
+    }
+  }
+
+  // If no free channel is found, return -1
+  Serial.println("ERROR: No free servo channels available!");
+  return -1;
+}
+
+// Release a servo channel when it's no longer needed
+void releaseServoChannel(int channel) {
+  if (channel >= 0 && channel < MAX_SERVO_CHANNELS) {
+    servoChannelUsed[channel] = false;
+    Serial.printf("DEBUG: Released servo channel %d\n", channel);
+  }
 }

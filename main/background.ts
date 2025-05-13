@@ -283,6 +283,7 @@ function getPioPath(): string {
     },
   });
   mainWindow.setFullScreen(true);
+  mainWindow.webContents.openDevTools();
 
   // Clean up on app quit
   app.on("will-quit", () => {

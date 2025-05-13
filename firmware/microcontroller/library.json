@@ -1,0 +1,27 @@
+{
+  "name": "Everwood CNC Firmware",
+  "version": "1.0.0",
+  "description": "Firmware for Everwood CNC hardware",
+  "keywords": "CNC, ESP32, Servo, Stepper",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/everwood-cnc.git"
+  },
+  "authors": [
+    {
+      "name": "Everwood Team",
+      "email": "info@everwood.com",
+      "url": "https://everwood.com"
+    }
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "roboticsbrno/ServoESP32": "^1.1.1",
+    "bblanchon/ArduinoJson": "^6.21.2",
+    "me-no-dev/ESPAsyncWebServer": "^3.6.0",
+    "gin66/FastAccelStepper": "^0.31.6",
+    "thomasfredericks/Bounce2": "^2.72"
+  },
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

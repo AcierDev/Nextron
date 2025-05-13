@@ -590,11 +590,14 @@ export default function Dashboard() {
         ) as StepperMotorDisplay | undefined;
 
         if (stepperComponent) {
-          // Include all homing settings from the component
-          if (!configUpdatePayload.hasOwnProperty("homeSensorId")) {
-            configUpdatePayload.homeSensorId =
-              stepperComponent.initialHomeSensorId || null;
-          }
+          // Fix for homeSensorId being reset: Always get the latest value from the component state
+          // or from the newSettings if it was explicitly changed
+          configUpdatePayload.homeSensorId =
+            newSettings.initialHomeSensorId !== undefined
+              ? newSettings.initialHomeSensorId
+              : stepperComponent.initialHomeSensorId || null;
+
+          // Include all other homing settings from the component if not already set
           if (!configUpdatePayload.hasOwnProperty("homingDirection")) {
             configUpdatePayload.homingDirection =
               stepperComponent.initialHomingDirection || 1;

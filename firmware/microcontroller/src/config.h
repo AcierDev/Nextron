@@ -3,8 +3,8 @@
 
 #include <Arduino.h>
 #include <Bounce2.h>
-#include <ESP32Servo.h>  // Add standard servo library
 #include <FastAccelStepper.h>
+#include <Servo.h>  // Using ServoESP32 library (header is still named Servo.h)
 
 #include <map>
 #include <vector>
@@ -29,12 +29,17 @@ struct IoPinConfig {
 };
 
 // --- Servo Configuration ---
+// ESP32 has 16 channels (0-15) for PWM
+const int MAX_SERVO_CHANNELS = 16;
+extern bool
+    servoChannelUsed[MAX_SERVO_CHANNELS];  // Track which channels are in use
+
 struct ServoConfig {
   String id;
   String name;
   uint8_t pin;
-  Servo servo;  // Standard servo instance
-  bool isAttached = false;
+  int channel = -1;  // PWM channel (-1 means not assigned)
+  Servo servo;       // ServoESP32 instance
 
   // Configuration
   int minAngle = 0;
@@ -109,6 +114,8 @@ extern std::map<String, unsigned long> lastPinReadTime;
 IoPinConfig* findPinById(const String& id);
 ServoConfig* findServoById(const String& id);
 StepperConfig* findStepperById(const String& id);
+int allocateServoChannel();
+void releaseServoChannel(int channel);
 
 // --- Debug printing functions for configuration diagnostics ---
 inline void debugPrintServoConfigurations() {
@@ -118,11 +125,12 @@ inline void debugPrintServoConfigurations() {
   for (size_t i = 0; i < configuredServos.size(); i++) {
     const auto& servo = configuredServos[i];
     Serial.printf(
-        "Servo[%d]: id='%s', name='%s', pin=%d, range=[%d-%d], "
+        "Servo[%d]: id='%s', name='%s', pin=%d, channel=%d, range=[%d-%d], "
         "pulseWidth=[%d-%d], angle=%d, attached=%s\n",
-        i, servo.id.c_str(), servo.name.c_str(), servo.pin, servo.minAngle,
-        servo.maxAngle, servo.minPulseWidth, servo.maxPulseWidth,
-        servo.currentAngle, servo.isAttached ? "true" : "false");
+        i, servo.id.c_str(), servo.name.c_str(), servo.pin, servo.channel,
+        servo.minAngle, servo.maxAngle, servo.minPulseWidth,
+        servo.maxPulseWidth, servo.currentAngle,
+        configuredServos[i].servo.attached() ? "true" : "false");
   }
   Serial.println(F("=========================================="));
 }

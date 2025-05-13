@@ -35,7 +35,7 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
       if (info->final && info->index == 0 && info->len == len &&
           info->opcode == WS_TEXT) {
         data[len] = 0;  // Null-terminate the received data
-        Serial.printf("Received WS [%u]: %s\n", client->id(), (char *)data);
+        // Serial.printf("Received WS [%u]: %s\n", client->id(), (char *)data);
 
         StaticJsonDocument<512> doc;  // Adjust size as needed
         DeserializationError error = deserializeJson(doc, (char *)data);
@@ -45,10 +45,15 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
           return;
         }
 
-        // Debug: Print received message to Serial
-        Serial.println(F("Received JSON message:"));
-        serializeJsonPretty(doc, Serial);
-        Serial.println();
+        if (doc.containsKey("action")) {
+          const char *action = doc["action"];
+          if (!strcmp(action, "ping") == 0) {
+            // Debug: Print received message to Serial
+            Serial.println(F("Received JSON message:"));
+            serializeJsonPretty(doc, Serial);
+            Serial.println();
+          }
+        }
 
         const char *action = doc["action"];
         const char *group = doc["componentGroup"];
@@ -63,7 +68,8 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
           return;
         }
 
-        Serial.printf("Processing action: %s for group: %s\n", action, group);
+        // Serial.printf("Processing action: %s for group: %s\n", action,
+        // group);
 
         if (strcmp(group, "pins") == 0) {
           handlePinMessage(client, doc);
@@ -235,197 +241,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   }
 }
 
-void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
-  const char *action = doc["action"];
-  String id = doc["id"];  // Common for most servo actions
-
-  if (strcmp(action, "configure") == 0) {
-    JsonObject config = doc["config"];
-    String cfg_id = config["id"];
-    String name = config["name"];
-    uint8_t pin = config["pin"];
-    int minAngle = config["minAngle"] | 0;
-    int maxAngle = config["maxAngle"] | 180;
-    int minPulseWidth = config["minPulseWidth"] | 500;
-    int maxPulseWidth = config["maxPulseWidth"] | 2400;
-    int initialAngle = config["initialAngle"] | 90;
-
-    if (cfg_id.isEmpty() || name.isEmpty() || pin == 0) {
-      client->text(F("ERROR: Missing servo config fields (id, name, pin)"));
-      return;
-    }
-
-    ServoConfig *existingServo = findServoById(cfg_id);
-
-    if (existingServo) {
-      // Clean up existing servo before reconfiguring
-      cleanupServo(*existingServo);
-
-      // Update configuration
-      existingServo->name = name;
-      existingServo->pin = pin;
-      existingServo->minAngle = minAngle;
-      existingServo->maxAngle = maxAngle;
-      existingServo->minPulseWidth = minPulseWidth;
-      existingServo->maxPulseWidth = maxPulseWidth;
-      existingServo->currentAngle = initialAngle;
-
-      // Initialize with new configuration
-      initializeServo(*existingServo);
-    } else {
-      ServoConfig newServo;
-      newServo.id = cfg_id;
-      newServo.name = name;
-      newServo.pin = pin;
-      newServo.minAngle = minAngle;
-      newServo.maxAngle = maxAngle;
-      newServo.minPulseWidth = minPulseWidth;
-      newServo.maxPulseWidth = maxPulseWidth;
-      newServo.currentAngle = initialAngle;
-      newServo.isAttached = false;
-
-      // Initialize the servo
-      initializeServo(newServo);
-      configuredServos.push_back(newServo);
-    }
-
-    // Send success response
-    StaticJsonDocument<256> response;
-    response["status"] = F("OK");
-    response["message"] = F("Servo configured");
-    response["id"] = cfg_id;
-    response["componentGroup"] = F("servos");
-    String jsonResponse;
-    serializeJson(response, jsonResponse);
-    client->text(jsonResponse);
-
-  } else if (strcmp(action, "control") == 0) {
-    // New control action for servos (similar to stepper control)
-    const char *command = doc["command"];
-    if (!command) {
-      client->text(F("ERROR: Missing 'command' for servo control"));
-      return;
-    }
-
-    ServoConfig *servo = findServoById(id);
-    if (!servo) {
-      sendServoNotFoundError(client, id);
-      return;
-    }
-
-    if (strcmp(command, "move") == 0) {
-      int angle = doc["angle"] | -1;
-
-      if (angle < 0) {
-        client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
-        return;
-      }
-
-      // Process speed if provided
-      if (doc.containsKey("speed")) {
-        int speed = doc["speed"].as<int>();
-        // Ensure speed is in valid range
-        if (speed < 1) speed = 1;
-        if (speed > 100) speed = 100;
-        servo->speed = speed;
-      }
-
-      // Store command ID if provided (for sequence tracking)
-      if (doc.containsKey("commandId")) {
-        servo->pendingCommandId = doc["commandId"].as<String>();
-      }
-
-      // Try to move the servo
-      if (moveServo(*servo, angle)) {
-        char buffer[100];
-        snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
-                 id.c_str(), angle);
-        client->text(buffer);
-      } else {
-        String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
-                          F(" to angle ") + String(angle);
-        client->text(errorMsg);
-      }
-    } else if (strcmp(command, "detach") == 0) {
-      cleanupServo(*servo);
-      client->text(String(F("OK: Servo ")) + id + F(" detached"));
-    } else if (strcmp(command, "setParams") == 0) {
-      if (doc.containsKey("minAngle")) {
-        servo->minAngle = doc["minAngle"].as<int>();
-      }
-      if (doc.containsKey("maxAngle")) {
-        servo->maxAngle = doc["maxAngle"].as<int>();
-      }
-      if (doc.containsKey("minPulseWidth")) {
-        servo->minPulseWidth = doc["minPulseWidth"].as<int>();
-      }
-      if (doc.containsKey("maxPulseWidth")) {
-        servo->maxPulseWidth = doc["maxPulseWidth"].as<int>();
-      }
-
-      client->text(String(F("OK: Servo parameters updated for ")) + id);
-    } else {
-      client->text(F("ERROR: Unknown servo command"));
-    }
-  } else if (strcmp(action, "moveServo") == 0) {
-    // Legacy action for backward compatibility
-    int angle = doc["angle"] | -1;
-
-    if (angle < 0) {
-      client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
-      return;
-    }
-
-    ServoConfig *servo = findServoById(id);
-    if (!servo) {
-      sendServoNotFoundError(client, id);
-      return;
-    }
-
-    // Store command ID if provided (for sequence tracking)
-    if (doc.containsKey("commandId")) {
-      servo->pendingCommandId = doc["commandId"].as<String>();
-    }
-
-    // Try to move the servo
-    if (moveServo(*servo, angle)) {
-      char buffer[100];
-      snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
-               id.c_str(), angle);
-      client->text(buffer);
-    } else {
-      String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
-                        F(" to angle ") + String(angle);
-      client->text(errorMsg);
-    }
-
-  } else if (strcmp(action, "detachServo") == 0) {
-    // Legacy action for backward compatibility
-    ServoConfig *servo = findServoById(id);
-    if (!servo) {
-      sendServoNotFoundError(client, id);
-      return;
-    }
-
-    cleanupServo(*servo);
-    client->text(String(F("OK: Servo ")) + id + F(" detached"));
-
-  } else if (strcmp(action, "remove") == 0) {
-    auto it = std::remove_if(configuredServos.begin(), configuredServos.end(),
-                             [&](const ServoConfig &s) { return s.id == id; });
-
-    if (it != configuredServos.end()) {
-      cleanupServo(*it);  // Clean up before erasing
-      configuredServos.erase(it, configuredServos.end());
-      client->text(String(F("OK: Servo removed: ")) + id);
-    } else {
-      client->text(String(F("ERROR: Servo not found for removal: ")) + id);
-    }
-
-  } else {
-    client->text(F("ERROR: Unknown servo action"));
-  }
-}
+// handleServoMessage is now implemented in hardware/servo.cpp
 
 void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   const char *action = doc["action"];
@@ -460,14 +276,14 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       return;
     }
 
-    Serial.printf("Configuring stepper '%s' (ID: %s):\n", name.c_str(),
-                  cfg_id.c_str());
-    Serial.printf("  - Pins: PUL=%d, DIR=%d, ENA=%d\n", pulPin, dirPin, enaPin);
-    Serial.printf("  - Speed: %.2f steps/sec\n", maxSpeed);
-    Serial.printf("  - Acceleration: %.2f steps/sec²\n", acceleration);
-    Serial.printf("  - Position Range: %ld to %ld steps\n", minPosition,
-                  maxPosition);
-    Serial.printf("  - Steps per inch: %.2f\n", stepsPerInch);
+    // Serial.printf("Configuring stepper '%s' (ID: %s):\n", name.c_str(),
+    //               cfg_id.c_str());
+    // Serial.printf("  - Pins: PUL=%d, DIR=%d, ENA=%d\n", pulPin, dirPin,
+    // enaPin); Serial.printf("  - Speed: %.2f steps/sec\n", maxSpeed);
+    // Serial.printf("  - Acceleration: %.2f steps/sec²\n", acceleration);
+    // Serial.printf("  - Position Range: %ld to %ld steps\n", minPosition,
+    //               maxPosition);
+    // Serial.printf("  - Steps per inch: %.2f\n", stepsPerInch);
 
     StepperConfig *existingStepper = findStepperById(cfg_id);
 
@@ -583,8 +399,8 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     if (strcmp(command, "setParams") == 0) {
       // Update stepper parameters
-      Serial.printf("Updating parameters for stepper '%s':\n",
-                    stepper->name.c_str());
+      // Serial.printf("Updating parameters for stepper '%s':\n",
+      //               stepper->name.c_str());
 
       float oldSpeed = stepper->maxSpeed;
       float oldAcceleration = stepper->acceleration;
@@ -595,44 +411,44 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         stepper->maxSpeed = doc["speed"].as<float>();
         stepper->stepper->setSpeedInHz(stepper->maxSpeed);
         speedChanged = true;
-        Serial.printf("  - Speed updated: %.2f → %.2f steps/sec\n", oldSpeed,
-                      stepper->maxSpeed);
+        // Serial.printf("  - Speed updated: %.2f → %.2f steps/sec\n", oldSpeed,
+        //               stepper->maxSpeed);
       }
 
       if (doc.containsKey("acceleration")) {
         stepper->acceleration = doc["acceleration"].as<float>();
         stepper->stepper->setAcceleration(stepper->acceleration);
         accelerationChanged = true;
-        Serial.printf("  - Acceleration updated: %.2f → %.2f steps/sec²\n",
-                      oldAcceleration, stepper->acceleration);
+        // Serial.printf("  - Acceleration updated: %.2f → %.2f steps/sec²\n",
+        //               oldAcceleration, stepper->acceleration);
       }
 
       if (!speedChanged) {
-        Serial.printf("  - Speed unchanged: %.2f steps/sec\n",
-                      stepper->maxSpeed);
+        // Serial.printf("  - Speed unchanged: %.2f steps/sec\n",
+        //               stepper->maxSpeed);
       }
 
       if (!accelerationChanged) {
-        Serial.printf("  - Acceleration unchanged: %.2f steps/sec²\n",
-                      stepper->acceleration);
+        // Serial.printf("  - Acceleration unchanged: %.2f steps/sec²\n",
+        //               stepper->acceleration);
       }
 
       if (doc.containsKey("minPosition")) {
         stepper->minPosition = doc["minPosition"].as<long>();
-        Serial.printf("  - Min position updated to %ld steps\n",
-                      stepper->minPosition);
+        // Serial.printf("  - Min position updated to %ld steps\n",
+        //               stepper->minPosition);
       }
 
       if (doc.containsKey("maxPosition")) {
         stepper->maxPosition = doc["maxPosition"].as<long>();
-        Serial.printf("  - Max position updated to %ld steps\n",
-                      stepper->maxPosition);
+        // Serial.printf("  - Max position updated to %ld steps\n",
+        //               stepper->maxPosition);
       }
 
       if (doc.containsKey("stepsPerInch")) {
         stepper->stepsPerInch = doc["stepsPerInch"].as<float>();
-        Serial.printf("  - Steps per inch updated to %.2f\n",
-                      stepper->stepsPerInch);
+        // Serial.printf("  - Steps per inch updated to %.2f\n",
+        //               stepper->stepsPerInch);
       }
 
       // Update homing parameters
