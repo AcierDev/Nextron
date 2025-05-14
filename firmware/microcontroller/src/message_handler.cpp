@@ -484,6 +484,31 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (doc.containsKey("value")) {
         long steps = doc["value"].as<long>();
 
+        // Check if we're already at the limit in the direction of movement
+        long currentPos = stepper->stepper->getCurrentPosition();
+        bool atLimit = false;
+
+        if (steps > 0 && currentPos >= stepper->maxPosition) {
+          Serial.printf("Stepper '%s' already at max position limit (%ld)\n",
+                        stepper->name.c_str(), stepper->maxPosition);
+          atLimit = true;
+        } else if (steps < 0 && currentPos <= stepper->minPosition) {
+          Serial.printf("Stepper '%s' already at min position limit (%ld)\n",
+                        stepper->name.c_str(), stepper->minPosition);
+          atLimit = true;
+        }
+
+        if (atLimit) {
+          // If at limit, don't attempt to move and send completion immediately
+          if (!stepper->pendingCommandId.isEmpty()) {
+            sendStepperActionComplete(*stepper, true);
+            stepper->pendingCommandId = "";
+          }
+          client->text(String(F("OK: Stepper ")) + id +
+                       F(" at limit, no movement"));
+          return;
+        }
+
         if (moveStepperRelative(*stepper, steps)) {
           char buffer[128];
           snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld",

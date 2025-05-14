@@ -77,6 +77,16 @@ bool moveStepperToPosition(StepperConfig& config, long position) {
   // Clamp to limits
   long targetPos = clampPosition(&config, position);
 
+  // Check if already moving to this position
+  if (config.isActionPending && config.stepper->isRunning() &&
+      config.targetPosition == targetPos) {
+    Serial.printf(
+        "Stepper '%s' already moving to position %ld, ignoring duplicate "
+        "command\n",
+        config.name.c_str(), targetPos);
+    return true;  // Return true since the movement is happening
+  }
+
   // Start the move
   config.stepper->moveTo(targetPos);
   config.targetPosition = targetPos;
@@ -92,9 +102,56 @@ bool moveStepperRelative(StepperConfig& config, long steps) {
   if (config.stepper == nullptr) return false;
 
   long currentPos = config.stepper->getCurrentPosition();
-  long newPos = clampPosition(&config, currentPos + steps);
-  long adjustedSteps =
-      newPos - currentPos;  // Recalculate steps based on clamping
+  Serial.printf("Stepper '%s' current position: %ld\n", config.name.c_str(),
+                currentPos);
+
+  // Check if the stepper is already moving - if so, use target position as
+  // reference
+  bool isAlreadyMoving = config.isActionPending && config.stepper->isRunning();
+  long referencePos;
+
+  if (isAlreadyMoving) {
+    referencePos = config.targetPosition;
+    Serial.printf(
+        "Stepper '%s' is already moving, using target position %ld as "
+        "reference\n",
+        config.name.c_str(), referencePos);
+
+    // If already moving toward a limit and new command would move in same
+    // direction, skip
+    if ((referencePos == config.maxPosition && steps > 0) ||
+        (referencePos == config.minPosition && steps < 0)) {
+      Serial.printf(
+          "Stepper '%s' already moving to %s limit, ignoring additional "
+          "movement\n",
+          config.name.c_str(),
+          (referencePos == config.maxPosition) ? "maximum" : "minimum");
+      return false;
+    }
+  } else {
+    referencePos = currentPos;
+  }
+
+  // Calculate new position based on reference position + requested steps
+  long newPos = clampPosition(&config, referencePos + steps);
+  Serial.printf(
+      "Stepper '%s' requested steps: %ld, clamped new position: %ld\n",
+      config.name.c_str(), steps, newPos);
+
+  // If already at target position, no need to move
+  if (newPos == referencePos && isAlreadyMoving) {
+    Serial.printf(
+        "Stepper '%s' already moving to position %ld, no additional movement "
+        "needed\n",
+        config.name.c_str(), newPos);
+    return false;
+  }
+
+  // Calculate adjusted steps based on the current physical position
+  long adjustedSteps = newPos - currentPos;
+
+  Serial.printf("Stepper '%s' adjusted steps after clamping: %ld\n",
+                config.name.c_str(), adjustedSteps);
 
   if (adjustedSteps == 0) {
     // No movement needed (already at limit)
@@ -184,6 +241,8 @@ bool homeStepperWithSensor(StepperConfig& config) {
 
 // Helper to clamp a position within the stepper's limits
 long clampPosition(StepperConfig* stepper, long position) {
+  Serial.printf("Current stepper max position: %ld, min position: %ld\n",
+                stepper->maxPosition, stepper->minPosition);
   if (position < stepper->minPosition) return stepper->minPosition;
   if (position > stepper->maxPosition) return stepper->maxPosition;
   return position;

@@ -167,6 +167,9 @@ export default function StepperCardDesign2({
   const initialJogAmountRef = useRef(initialJogAmount ?? 200);
   const initialJogAmountInchesRef = useRef(initialJogAmountInches ?? 0.1);
 
+  // Add a ref to track previous ID to detect component instance changes
+  const prevIdRef = useRef(id);
+
   // Jogging State - Initialize from REFS or defaults
   const [jogUnit, setJogUnit] = useState<"steps" | "inches">(
     initialJogUnitRef.current
@@ -208,24 +211,23 @@ export default function StepperCardDesign2({
     setHomePositionOffset(initialHomePositionOffset);
     setHomePositionOffsetInput(initialHomePositionOffset.toString());
 
-    // On mount or ID change, re-evaluate initial jog settings from props if they exist
-    // This allows the dashboard to set new defaults if the component instance changes
-    // or if we want to explicitly re-initialize from new prop values (e.g., after duplication).
-    // However, for typical prop updates WHILE the component is mounted for the *same* motor,
-    // we want the local state (set by user interaction) to persist.
-    if (initialJogUnit !== undefined && initialJogUnit !== jogUnit) {
-      setJogUnit(initialJogUnit);
-    }
-    if (initialJogAmount !== undefined && initialJogAmount !== jogAmount) {
-      setJogAmount(initialJogAmount);
-      setJogAmountInput(initialJogAmount.toString());
-    }
-    if (
-      initialJogAmountInches !== undefined &&
-      initialJogAmountInches !== jogAmountInches
-    ) {
-      setJogAmountInches(initialJogAmountInches);
-      setJogAmountInchesInput(initialJogAmountInches.toString());
+    // IMPORTANT: Only update jog settings on initial mount or when ID changes
+    // This prevents jog settings from being reset when speed/acceleration changes
+    if (id !== prevIdRef.current) {
+      prevIdRef.current = id;
+
+      // Only on ID change or initial mount, update jog settings from props
+      if (initialJogUnit !== undefined) {
+        setJogUnit(initialJogUnit);
+      }
+      if (initialJogAmount !== undefined) {
+        setJogAmount(initialJogAmount);
+        setJogAmountInput(initialJogAmount.toString());
+      }
+      if (initialJogAmountInches !== undefined) {
+        setJogAmountInches(initialJogAmountInches);
+        setJogAmountInchesInput(initialJogAmountInches.toString());
+      }
     }
   }, [
     id, // Keep id, if the component is for a new motor, re-init everything
@@ -234,38 +236,12 @@ export default function StepperCardDesign2({
     initialStepsPerInch,
     initialMinPosition,
     initialMaxPosition,
-    // REMOVED: initialJogUnit, initialJogAmount, initialJogAmountInches from here
     initialHomeSensorId,
     initialHomingDirection,
     initialHomingSpeed,
     initialHomeSensorPinActiveState,
     initialHomePositionOffset,
-    // Add jogUnit, jogAmount, jogAmountInches to dependency array to react to their changes from props (if forced by parent)
-    initialJogUnit,
-    initialJogAmount,
-    initialJogAmountInches,
-  ]);
-
-  // Effect to send min/max/stepsPerInch changes back to the server
-  useEffect(() => {
-    const handleConfigUpdate = async () => {
-      console.log(
-        `[StepperCard ${id}] Updating configuration: min=${minPosition}, max=${maxPosition}, stepsPerInch=${stepsPerInch}`
-      );
-      await sendMessage({
-        action: "control",
-        componentGroup: "steppers",
-        id,
-        command: "setParams",
-        minPosition,
-        maxPosition,
-        stepsPerInch,
-      });
-    };
-
-    const timeoutId = setTimeout(handleConfigUpdate, 500);
-    return () => clearTimeout(timeoutId);
-  }, [minPosition, maxPosition, stepsPerInch, id, sendMessage]);
+  ]); // Remove initialJogUnit, initialJogAmount, initialJogAmountInches from dependencies
 
   // Effects to sync string inputs if primary numeric state changes
   useEffect(() => {
@@ -741,7 +717,11 @@ export default function StepperCardDesign2({
                         // Add validation if needed, e.g. numVal < maxPosition
                         setMinPosition(numVal);
                         if (onSettingsChange) {
-                          onSettingsChange(id, { minPosition: numVal });
+                          // Send both min and max position values to prevent resetting the other
+                          onSettingsChange(id, {
+                            minPosition: numVal,
+                            maxPosition: maxPosition, // Include current maxPosition
+                          });
                         }
                       }
                     }}
@@ -768,7 +748,11 @@ export default function StepperCardDesign2({
                         // Add validation if needed, e.g. numVal > minPosition
                         setMaxPosition(numVal);
                         if (onSettingsChange) {
-                          onSettingsChange(id, { maxPosition: numVal });
+                          // Send both min and max position values to prevent resetting the other
+                          onSettingsChange(id, {
+                            maxPosition: numVal,
+                            minPosition: minPosition, // Include current minPosition
+                          });
                         }
                       }
                     }}
