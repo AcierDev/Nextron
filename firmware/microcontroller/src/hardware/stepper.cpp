@@ -9,6 +9,11 @@
 // Forward declaration for WebSocket instance
 extern AsyncWebSocket ws;
 
+// Forward declaration for WebSocket message sending functions
+extern void sendWebSocketMessage(AsyncWebSocketClient* client,
+                                 const String& message);
+extern void broadcastWebSocketMessage(const String& message);
+
 // --- Stepper Motor Operations ---
 
 // Initialize a stepper motor with the given configuration
@@ -101,70 +106,52 @@ bool moveStepperToPosition(StepperConfig& config, long position) {
 bool moveStepperRelative(StepperConfig& config, long steps) {
   if (config.stepper == nullptr) return false;
 
+  // Get the actual current position
   long currentPos = config.stepper->getCurrentPosition();
-  Serial.printf("Stepper '%s' current position: %ld\n", config.name.c_str(),
-                currentPos);
 
-  // Check if the stepper is already moving - if so, use target position as
-  // reference
-  bool isAlreadyMoving = config.isActionPending && config.stepper->isRunning();
-  long referencePos;
-
-  if (isAlreadyMoving) {
-    referencePos = config.targetPosition;
+  // If the stepper is already running, we'll add to its target position instead
+  // of current position
+  long startPos;
+  if (config.stepper->isRunning()) {
+    // Use the targeted end position for the calculation
+    startPos = config.targetPosition;
     Serial.printf(
-        "Stepper '%s' is already moving, using target position %ld as "
-        "reference\n",
-        config.name.c_str(), referencePos);
-
-    // If already moving toward a limit and new command would move in same
-    // direction, skip
-    if ((referencePos == config.maxPosition && steps > 0) ||
-        (referencePos == config.minPosition && steps < 0)) {
-      Serial.printf(
-          "Stepper '%s' already moving to %s limit, ignoring additional "
-          "movement\n",
-          config.name.c_str(),
-          (referencePos == config.maxPosition) ? "maximum" : "minimum");
-      return false;
-    }
+        "Stepper '%s' already moving. Adding from target position %ld\n",
+        config.name.c_str(), startPos);
   } else {
-    referencePos = currentPos;
+    // Not running, use current position
+    startPos = currentPos;
+    // Update tracking variables to match reality
+    config.currentPosition = currentPos;
   }
 
-  // Calculate new position based on reference position + requested steps
-  long newPos = clampPosition(&config, referencePos + steps);
-  Serial.printf(
-      "Stepper '%s' requested steps: %ld, clamped new position: %ld\n",
-      config.name.c_str(), steps, newPos);
+  // Calculate the intended target position
+  long newPos = startPos + steps;
 
-  // If already at target position, no need to move
-  if (newPos == referencePos && isAlreadyMoving) {
-    Serial.printf(
-        "Stepper '%s' already moving to position %ld, no additional movement "
-        "needed\n",
-        config.name.c_str(), newPos);
-    return false;
-  }
+  // Clamp the new position to limits
+  newPos = clampPosition(&config, newPos);
 
-  // Calculate adjusted steps based on the current physical position
-  long adjustedSteps = newPos - currentPos;
+  // Calculate the actual steps needed after clamping
+  long adjustedSteps = newPos - startPos;
 
-  Serial.printf("Stepper '%s' adjusted steps after clamping: %ld\n",
-                config.name.c_str(), adjustedSteps);
-
+  // If no movement needed (already at limit)
   if (adjustedSteps == 0) {
-    // No movement needed (already at limit)
     return false;
   }
 
-  // Start the move
-  config.stepper->move(adjustedSteps);
+  // If already running, we need to stop and reset with the new target
+  if (config.stepper->isRunning()) {
+    // We use moveTo instead of move to maintain overall movement direction and
+    // distance
+    config.stepper->moveTo(newPos);
+  } else {
+    // Not running, start a new movement
+    config.stepper->moveTo(newPos);
+  }
+
   config.targetPosition = newPos;
   config.isActionPending = true;
 
-  Serial.printf("Stepper '%s' moving relative by %ld steps to %ld\n",
-                config.name.c_str(), adjustedSteps, newPos);
   return true;
 }
 
@@ -260,7 +247,7 @@ void sendStepperNotFoundError(AsyncWebSocketClient* client, const String& id) {
 
   String jsonResponse;
   serializeJson(response, jsonResponse);
-  client->text(jsonResponse);
+  sendWebSocketMessage(client, jsonResponse);
 }
 
 // Send position update for a stepper
@@ -272,7 +259,7 @@ void sendStepperPositionUpdate(const StepperConfig& config) {
 
   String output;
   serializeJson(updateDoc, output);
-  ws.textAll(output);
+  broadcastWebSocketMessage(output);
 }
 
 // Send action completion notification
@@ -295,7 +282,7 @@ void sendStepperActionComplete(const StepperConfig& config, bool success,
 
   String completionJson;
   serializeJson(completionMsg, completionJson);
-  ws.textAll(completionJson);
+  broadcastWebSocketMessage(completionJson);
 
   Serial.printf("Stepper '%s': Action %s for command %s at position %ld\n",
                 config.id.c_str(), success ? "completed" : "failed",
@@ -312,6 +299,33 @@ void updateStepperPositions() {
     if (stepperConfig.stepper) {
       // Get current position
       long currentPos = stepperConfig.stepper->getCurrentPosition();
+
+      // Enforce limits - if the stepper somehow went outside its limits, stop
+      // it
+      if (!stepperConfig.isHoming && (currentPos < stepperConfig.minPosition ||
+                                      currentPos > stepperConfig.maxPosition)) {
+        Serial.printf(
+            "WARNING: Stepper '%s' position %ld is outside limits [%ld, %ld]. "
+            "Stopping.\n",
+            stepperConfig.id.c_str(), currentPos, stepperConfig.minPosition,
+            stepperConfig.maxPosition);
+
+        // Force stop
+        stepperConfig.stepper->forceStop();
+
+        // Set position to the nearest limit
+        long correctedPos = (currentPos < stepperConfig.minPosition)
+                                ? stepperConfig.minPosition
+                                : stepperConfig.maxPosition;
+
+        stepperConfig.stepper->setCurrentPosition(correctedPos);
+        currentPos = correctedPos;
+        stepperConfig.currentPosition = correctedPos;
+        stepperConfig.targetPosition = correctedPos;
+
+        // Send immediate update
+        sendStepperPositionUpdate(stepperConfig);
+      }
 
       // Handle homing sequence
       if (stepperConfig.isHoming) {

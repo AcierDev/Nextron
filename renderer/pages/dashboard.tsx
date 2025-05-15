@@ -187,11 +187,6 @@ export default function Dashboard() {
           }
 
           if (updateId !== null && stateValue !== undefined) {
-            console.log(
-              `Updating state for ${
-                data.type ?? "component"
-              } ${updateId}: ${stateValue}`
-            );
             updateComponentState(updateId, stateValue);
           }
         } else if (typeof message === "string") {

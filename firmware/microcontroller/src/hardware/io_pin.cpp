@@ -7,6 +7,9 @@
 // Forward declaration for WebSocket instance
 extern AsyncWebSocket ws;
 
+// Forward declaration for WebSocket broadcast function
+extern void broadcastWebSocketMessage(const String &message);
+
 // Initialize a pin based on its configuration
 void initializePin(IoPinConfig &pinConfig) {
   // Setup pin based on mode and type
@@ -118,7 +121,7 @@ void updatePinValues() {
         String out;
         serializeJson(msg, out);
 
-        ws.textAll(out);
+        broadcastWebSocketMessage(out);
       }
     }
   }
