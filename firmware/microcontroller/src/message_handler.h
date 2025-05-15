@@ -10,10 +10,6 @@
 extern AsyncWebServer server;
 extern AsyncWebSocket ws;
 
-// WebSocket message helpers
-void sendWebSocketMessage(AsyncWebSocketClient *client, const String &message);
-void broadcastWebSocketMessage(const String &message);
-
 // Main WebSocket event handler
 void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                       AwsEventType type, void *arg, uint8_t *data, size_t len);

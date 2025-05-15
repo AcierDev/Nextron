@@ -10,20 +10,6 @@
 // FastAccelStepper engine instance (declared in main.cpp.new)
 extern FastAccelStepperEngine engine;
 
-// Helper function to log and broadcast WebSocket messages to all clients
-void broadcastWebSocketMessage(const String &message) {
-  Serial.print("WS_BROADCAST: ");
-  Serial.println(message);
-  ws.textAll(message);
-}
-
-// Helper function to log and send WebSocket messages
-void sendWebSocketMessage(AsyncWebSocketClient *client, const String &message) {
-  Serial.print("WS_OUT: ");
-  Serial.println(message);
-  client->text(message);
-}
-
 void initWebSocketServer() {
   ws.onEvent(onWebSocketEvent);
   server.addHandler(&ws);
@@ -55,7 +41,7 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
         DeserializationError error = deserializeJson(doc, (char *)data);
         if (error) {
           Serial.printf("JSON DeserializationError: %s\n", error.c_str());
-          sendWebSocketMessage(client, F("ERROR: Invalid JSON"));
+          client->text(F("ERROR: Invalid JSON"));
           return;
         }
 
@@ -73,13 +59,12 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
         const char *group = doc["componentGroup"];
 
         if (!action) {
-          sendWebSocketMessage(client, F("ERROR: Missing action field"));
+          client->text(F("ERROR: Missing action field"));
           return;
         }
 
         if (!group) {
-          sendWebSocketMessage(client,
-                               F("ERROR: Missing componentGroup field"));
+          client->text(F("ERROR: Missing componentGroup field"));
           return;
         }
 
@@ -96,7 +81,7 @@ void onWebSocketEvent(AsyncWebSocket *server_instance,
           handleSystemMessage(client, doc);
         } else {
           Serial.printf("Received unhandled group: %s\n", group);
-          sendWebSocketMessage(client, F("ERROR: Unhandled component group"));
+          client->text(F("ERROR: Unhandled component group"));
         }
       }
       break;
@@ -122,9 +107,9 @@ void handleSystemMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    sendWebSocketMessage(client, jsonResponse);
+    client->text(jsonResponse);
   } else {
-    sendWebSocketMessage(client, F("ERROR: Unknown system action"));
+    client->text(F("ERROR: Unknown system action"));
   }
 }
 
@@ -146,8 +131,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
                   debounceMs);
 
     if (id.isEmpty() || name.isEmpty()) {
-      sendWebSocketMessage(client,
-                           F("ERROR: Missing required config fields for pin"));
+      client->text(F("ERROR: Missing required config fields for pin"));
       return;
     }
 
@@ -174,17 +158,17 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     response["id"] = id;
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    sendWebSocketMessage(client, jsonResponse);
+    client->text(jsonResponse);
 
   } else if (strcmp(action, "readPin") == 0) {
     String id = doc["id"];
     IoPinConfig *pinToRead = findPinById(id);
     if (!pinToRead) {
-      sendWebSocketMessage(client, F("ERROR: Pin not found"));
+      client->text(F("ERROR: Pin not found"));
       return;
     }
     if (pinToRead->mode != "input") {
-      sendWebSocketMessage(client, F("ERROR: Pin is not configured as input"));
+      client->text(F("ERROR: Pin is not configured as input"));
       return;
     }
     int value = 0;
@@ -200,7 +184,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     response["value"] = value;
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    sendWebSocketMessage(client, jsonResponse);
+    client->text(jsonResponse);
 
   } else if (strcmp(action, "writePin") == 0) {
     String id = doc["id"];
@@ -210,11 +194,11 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
 
     IoPinConfig *pinToWrite = findPinById(id);
     if (!pinToWrite) {
-      sendWebSocketMessage(client, F("ERROR: Pin not found"));
+      client->text(F("ERROR: Pin not found"));
       return;
     }
     if (pinToWrite->mode != "output") {
-      sendWebSocketMessage(client, F("ERROR: Pin is not configured as output"));
+      client->text(F("ERROR: Pin is not configured as output"));
       return;
     }
 
@@ -226,8 +210,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (pinToWrite->pin == 25 || pinToWrite->pin == 26) {
         // dacWrite(pinToWrite->pin, constrain(value, 0, 255));
       } else {
-        sendWebSocketMessage(
-            client, F("ERROR: Pin does not support analog output (DAC)"));
+        client->text(F("ERROR: Pin does not support analog output (DAC)"));
         return;
       }
     }
@@ -239,7 +222,7 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     response["value"] = value;
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    sendWebSocketMessage(client, jsonResponse);
+    client->text(jsonResponse);
 
   } else if (strcmp(action, "remove") == 0) {
     String id = doc["id"];
@@ -249,12 +232,12 @@ void handlePinMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       cleanupPin(*it);  // Clean up before erasing
       configuredPins.erase(it, configuredPins.end());
       lastPinReadTime.erase(id);  // Remove from polling map
-      sendWebSocketMessage(client, F("OK: Pin removed"));
+      client->text(F("OK: Pin removed"));
     } else {
-      sendWebSocketMessage(client, F("ERROR: Pin not found for removal"));
+      client->text(F("ERROR: Pin not found for removal"));
     }
   } else {
-    sendWebSocketMessage(client, F("ERROR: Unknown pin action"));
+    client->text(F("ERROR: Unknown pin action"));
   }
 }
 
@@ -288,8 +271,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     long homePositionOffset = config["homePositionOffset"] | 0;
 
     if (cfg_id.isEmpty() || name.isEmpty() || pulPin == 0 || dirPin == 0) {
-      sendWebSocketMessage(
-          client,
+      client->text(
           F("ERROR: Missing stepper config fields (id, name, pulPin, dirPin)"));
       return;
     }
@@ -375,9 +357,8 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         configuredSteppers.push_back(newConfig);
         existingStepper = &configuredSteppers.back();
       } else {
-        sendWebSocketMessage(
-            client, String(F("ERROR: Failed to create stepper on pin ")) +
-                        String(pulPin));
+        client->text(String(F("ERROR: Failed to create stepper on pin ")) +
+                     String(pulPin));
         return;
       }
     }
@@ -393,7 +374,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     response["componentGroup"] = F("steppers");
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    sendWebSocketMessage(client, jsonResponse);
+    client->text(jsonResponse);
     return;  // Exit after configure
   }
 
@@ -407,8 +388,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
   if (strcmp(action, "control") == 0) {
     const char *command = doc["command"];
     if (!command) {
-      sendWebSocketMessage(client,
-                           F("ERROR: Missing 'command' for stepper control"));
+      client->text(F("ERROR: Missing 'command' for stepper control"));
       return;
     }
 
@@ -484,8 +464,7 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       if (doc.containsKey("homePositionOffset"))
         stepper->homePositionOffset = doc["homePositionOffset"].as<long>();
 
-      String response = String(F("OK: Stepper params updated for ")) + id;
-      sendWebSocketMessage(client, response);
+      client->text(String(F("OK: Stepper params updated for ")) + id);
     } else if (strcmp(command, "move") == 0) {
       if (doc.containsKey("value")) {
         long targetPos = doc["value"].as<long>();
@@ -494,89 +473,33 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
           char buffer[100];
           snprintf(buffer, sizeof(buffer), "OK: Stepper %s moving to %ld",
                    id.c_str(), targetPos);
-          sendWebSocketMessage(client, buffer);
+          client->text(buffer);
         } else {
-          sendWebSocketMessage(
-              client, String(F("ERROR: Failed to move stepper ")) + id);
+          client->text(String(F("ERROR: Failed to move stepper ")) + id);
         }
       } else {
-        sendWebSocketMessage(client,
-                             F("ERROR: Missing 'value' for move command"));
+        client->text(F("ERROR: Missing 'value' for move command"));
       }
     } else if (strcmp(command, "step") == 0) {
       if (doc.containsKey("value")) {
         long steps = doc["value"].as<long>();
 
-        // Get current position
-        long currentPos = stepper->stepper->getCurrentPosition();
-
-        // Get starting position for limit checking
-        long startPos;
-        if (stepper->stepper->isRunning()) {
-          // If already running, check against target position
-          startPos = stepper->targetPosition;
-        } else {
-          // If not running, check against current position
-          startPos = currentPos;
-        }
-
-        // Check if the requested movement would exceed limits
-        long requestedPos = startPos + steps;
-        bool wouldExceedLimit = (requestedPos < stepper->minPosition) ||
-                                (requestedPos > stepper->maxPosition);
-
-        // Check if we're already at the limit in the direction of movement
-        bool atLimit = false;
-
-        if (steps > 0 && startPos >= stepper->maxPosition) {
-          Serial.printf("Stepper '%s' already at max position limit (%ld)\n",
-                        stepper->name.c_str(), stepper->maxPosition);
-          atLimit = true;
-        } else if (steps < 0 && startPos <= stepper->minPosition) {
-          Serial.printf("Stepper '%s' already at min position limit (%ld)\n",
-                        stepper->name.c_str(), stepper->minPosition);
-          atLimit = true;
-        }
-
-        if (atLimit) {
-          // If at limit, don't attempt to move and send completion immediately
-          if (!stepper->pendingCommandId.isEmpty()) {
-            sendStepperActionComplete(*stepper, true);
-            stepper->pendingCommandId = "";
-          }
-          String response =
-              String(F("OK: Stepper ")) + id + F(" at limit, no movement");
-          sendWebSocketMessage(client, response);
-          return;
-        }
-
-        // If the requested movement would exceed limits, log it
-        if (wouldExceedLimit) {
-          Serial.printf(
-              "Clamping movement: requested position %ld outside limits [%ld, "
-              "%ld]\n",
-              requestedPos, stepper->minPosition, stepper->maxPosition);
-        }
-
         if (moveStepperRelative(*stepper, steps)) {
-          // Movement accepted and started
           char buffer[128];
           snprintf(buffer, sizeof(buffer), "OK: Stepper %s stepping %ld",
                    id.c_str(), steps);
-          sendWebSocketMessage(client, buffer);
+          client->text(buffer);
         } else {
           // If no actual movement due to clamping, send completion immediately
           if (!stepper->pendingCommandId.isEmpty()) {
             sendStepperActionComplete(*stepper, true);
             stepper->pendingCommandId = "";
           }
-          String response =
-              String(F("OK: Stepper ")) + id + F(" at limit, no movement");
-          sendWebSocketMessage(client, response);
+          client->text(String(F("OK: Stepper ")) + id +
+                       F(" at limit, no movement"));
         }
       } else {
-        sendWebSocketMessage(client,
-                             F("ERROR: Missing 'value' for step command"));
+        client->text(F("ERROR: Missing 'value' for step command"));
       }
     } else if (strcmp(command, "home") == 0) {
       // Check if we have a home sensor configured
@@ -585,13 +508,11 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
                       id.c_str(), stepper->homeSensorId.c_str());
         // Use sensor-based homing
         if (homeStepperWithSensor(*stepper)) {
-          String response =
-              String(F("OK: Stepper ")) + id + F(" homing with sensor");
-          sendWebSocketMessage(client, response);
+          client->text(String(F("OK: Stepper ")) + id +
+                       F(" homing with sensor"));
         } else {
-          String response =
-              String(F("ERROR: Failed to start homing for stepper ")) + id;
-          sendWebSocketMessage(client, response);
+          client->text(String(F("ERROR: Failed to start homing for stepper ")) +
+                       id);
         }
       } else {
         // No sensor, just move to middle position
@@ -600,16 +521,14 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
           char buffer[100];
           snprintf(buffer, sizeof(buffer), "OK: Stepper %s homing to %ld",
                    id.c_str(), homePos);
-          sendWebSocketMessage(client, buffer);
+          client->text(buffer);
         } else {
-          String response = String(F("ERROR: Failed to home stepper ")) + id;
-          sendWebSocketMessage(client, response);
+          client->text(String(F("ERROR: Failed to home stepper ")) + id);
         }
       }
     } else if (strcmp(command, "stop") == 0) {
       stopStepper(*stepper);
-      String response = String(F("OK: Stepper ")) + id + F(" emergency stop");
-      sendWebSocketMessage(client, response);
+      client->text(String(F("OK: Stepper ")) + id + F(" emergency stop"));
     } else if (strcmp(command, "setCurrentPosition") == 0) {
       if (doc.containsKey("value")) {
         long newPosition = doc["value"].as<long>();
@@ -619,21 +538,19 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
           snprintf(buffer, sizeof(buffer),
                    "OK: Stepper %s current position set to %ld", id.c_str(),
                    newPosition);
-          sendWebSocketMessage(client, buffer);
+          client->text(buffer);
 
           // Send an immediate position update to UI
           sendStepperPositionUpdate(*stepper);
         } else {
-          String response =
-              String("ERROR: Failed to set position for stepper ") + id;
-          sendWebSocketMessage(client, response);
+          client->text(F("ERROR: Failed to set position for stepper ")) + id;
         }
       } else {
-        sendWebSocketMessage(
-            client, F("ERROR: Missing 'value' for setCurrentPosition command"));
+        client->text(
+            F("ERROR: Missing 'value' for setCurrentPosition command"));
       }
     } else {
-      sendWebSocketMessage(client, F("ERROR: Unknown stepper command"));
+      client->text(F("ERROR: Unknown stepper command"));
     }
   } else if (strcmp(action, "remove") == 0) {
     auto it =
@@ -642,14 +559,11 @@ void handleStepperMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     if (it != configuredSteppers.end()) {
       cleanupStepper(*it);  // Clean up before erasing
       configuredSteppers.erase(it, configuredSteppers.end());
-      String response = String(F("OK: Stepper removed: ")) + id;
-      sendWebSocketMessage(client, response);
+      client->text(String(F("OK: Stepper removed: ")) + id);
     } else {
-      String response =
-          String(F("ERROR: Stepper not found for removal: ")) + id;
-      sendWebSocketMessage(client, response);
+      client->text(String(F("ERROR: Stepper not found for removal: ")) + id);
     }
   } else {
-    sendWebSocketMessage(client, F("ERROR: Unknown stepper action"));
+    client->text(F("ERROR: Unknown stepper action"));
   }
 }

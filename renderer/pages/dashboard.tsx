@@ -187,6 +187,11 @@ export default function Dashboard() {
           }
 
           if (updateId !== null && stateValue !== undefined) {
+            console.log(
+              `Updating state for ${
+                data.type ?? "component"
+              } ${updateId}: ${stateValue}`
+            );
             updateComponentState(updateId, stateValue);
           }
         } else if (typeof message === "string") {
@@ -513,37 +518,6 @@ export default function Dashboard() {
       configUpdatePayload.maxPosition = newSettings.maxPosition;
       changesMade = true;
     }
-
-    // If either min or max position was changed, ensure both are included in the payload
-    const isPositionSettingUpdated =
-      newSettings.minPosition !== undefined ||
-      newSettings.maxPosition !== undefined;
-
-    if (isPositionSettingUpdated) {
-      // Get the current stepper component with all its settings
-      const stepperComponent = components.find(
-        (c) => c.id === motorId && c.type === "stepper"
-      ) as StepperMotorDisplay | undefined;
-
-      if (stepperComponent) {
-        // If minPosition wasn't explicitly set but maxPosition was, include current minPosition
-        if (
-          newSettings.minPosition === undefined &&
-          newSettings.maxPosition !== undefined
-        ) {
-          configUpdatePayload.minPosition = stepperComponent.minPosition;
-        }
-
-        // If maxPosition wasn't explicitly set but minPosition was, include current maxPosition
-        if (
-          newSettings.maxPosition === undefined &&
-          newSettings.minPosition !== undefined
-        ) {
-          configUpdatePayload.maxPosition = stepperComponent.maxPosition;
-        }
-      }
-    }
-
     if (newSettings.stepsPerInch !== undefined) {
       configUpdatePayload.stepsPerInch = newSettings.stepsPerInch;
       changesMade = true;

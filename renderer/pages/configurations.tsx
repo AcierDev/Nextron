@@ -426,25 +426,24 @@ export default function ConfigurationsPage() {
 
       <div className="container mx-auto p-4 md:p-6">
         <header className="mb-8 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => router.push("/firmware-setup")}
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-                Motor Configurations
-              </h1>
-              <p className="text-gray-500 dark:text-gray-400">
-                Select a saved configuration or create a new one
-              </p>
-            </div>
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              Motor Configurations
+            </h1>
+            <p className="text-gray-500 dark:text-gray-400">
+              Select a saved configuration or create a new one
+            </p>
           </div>
 
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => router.push("/firmware-setup")}
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Setup
+            </Button>
             <Button
               className="flex items-center gap-2 bg-blue-600/90 hover:bg-blue-700 text-white dark:bg-blue-700/90 dark:hover:bg-blue-600 rounded-lg shadow-md hover:shadow-lg transition-all"
               onClick={() => {
