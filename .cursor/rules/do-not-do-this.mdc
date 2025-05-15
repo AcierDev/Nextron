@@ -3,4 +3,4 @@ description:
 globs: 
 alwaysApply: true
 ---
-Do not ever try to start the program on your own or upload to pio
+Do not ever try to start the program on your own or upload to the board usin platformio.

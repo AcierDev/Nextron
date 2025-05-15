@@ -1203,6 +1203,10 @@ export const useConfigStore = create<ConfigState & ConfigActions>()(
                   configPayload.maxSpeed = component.maxSpeed;
                 if (component.acceleration !== undefined)
                   configPayload.acceleration = component.acceleration;
+                if (component.minPosition !== undefined)
+                  configPayload.minPosition = component.minPosition;
+                if (component.maxPosition !== undefined)
+                  configPayload.maxPosition = component.maxPosition;
                 break;
               case "sensors":
                 configPayload.type = component.type;

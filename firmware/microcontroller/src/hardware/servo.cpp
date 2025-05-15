@@ -6,6 +6,11 @@
 // Forward declaration for WebSocket instance
 extern AsyncWebSocket ws;
 
+// Forward declaration for WebSocket message sending functions
+extern void sendWebSocketMessage(AsyncWebSocketClient *client,
+                                 const String &message);
+extern void broadcastWebSocketMessage(const String &message);
+
 // Initialize a servo based on its configuration
 void initializeServo(ServoConfig &servoConfig) {
   Serial.printf("DEBUG INIT: Initializing servo %s on pin %d\n",
@@ -131,7 +136,7 @@ void sendServoNotFoundError(AsyncWebSocketClient *client, const String &id) {
 
   String jsonResponse;
   serializeJson(response, jsonResponse);
-  client->text(jsonResponse);
+  sendWebSocketMessage(client, jsonResponse);
 }
 
 // Send action completion notification
@@ -154,7 +159,7 @@ void sendServoActionComplete(const ServoConfig &config, bool success,
 
   String completionJson;
   serializeJson(completionMsg, completionJson);
-  ws.textAll(completionJson);
+  broadcastWebSocketMessage(completionJson);
 
   Serial.printf("Servo '%s': Action %s for command %s at angle %d\n",
                 config.id.c_str(), success ? "completed" : "failed",
@@ -236,7 +241,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       channel = config["channel"];
       // Validate channel range
       if (channel < 0 || channel >= MAX_SERVO_CHANNELS) {
-        client->text(F("ERROR: Invalid servo channel (must be 0-15)"));
+        sendWebSocketMessage(client,
+                             F("ERROR: Invalid servo channel (must be 0-15)"));
         return;
       }
       // Check if channel is already in use by another servo
@@ -250,7 +256,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         }
 
         if (!usedBySelf) {
-          client->text(
+          sendWebSocketMessage(
+              client,
               F("ERROR: Servo channel already in use by another servo"));
           return;
         }
@@ -263,7 +270,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         cfg_id.c_str(), name.c_str(), pin, channel);
 
     if (cfg_id.isEmpty() || name.isEmpty() || pin == 0) {
-      client->text(F("ERROR: Missing servo config fields (id, name, pin)"));
+      sendWebSocketMessage(
+          client, F("ERROR: Missing servo config fields (id, name, pin)"));
       return;
     }
 
@@ -343,13 +351,14 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
                                         : configuredServos.back().channel;
     String jsonResponse;
     serializeJson(response, jsonResponse);
-    client->text(jsonResponse);
+    sendWebSocketMessage(client, jsonResponse);
 
   } else if (strcmp(action, "control") == 0) {
     // New control action for servos (similar to stepper control)
     const char *command = doc["command"];
     if (!command) {
-      client->text(F("ERROR: Missing 'command' for servo control"));
+      sendWebSocketMessage(client,
+                           F("ERROR: Missing 'command' for servo control"));
       return;
     }
 
@@ -363,7 +372,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       int angle = doc["angle"] | -1;
 
       if (angle < 0) {
-        client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
+        sendWebSocketMessage(
+            client, F("ERROR: Missing or invalid 'angle' for servo move"));
         return;
       }
 
@@ -386,15 +396,16 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         char buffer[100];
         snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
                  id.c_str(), angle);
-        client->text(buffer);
+        sendWebSocketMessage(client, buffer);
       } else {
         String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
                           F(" to angle ") + String(angle);
-        client->text(errorMsg);
+        sendWebSocketMessage(client, errorMsg);
       }
     } else if (strcmp(command, "detach") == 0) {
       cleanupServo(*servo);
-      client->text(String(F("OK: Servo ")) + id + F(" detached"));
+      String response = String(F("OK: Servo ")) + id + F(" detached");
+      sendWebSocketMessage(client, response);
     } else if (strcmp(command, "setParams") == 0) {
       if (doc.containsKey("minAngle")) {
         servo->minAngle = doc["minAngle"].as<int>();
@@ -409,16 +420,18 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
         servo->maxPulseWidth = doc["maxPulseWidth"].as<int>();
       }
 
-      client->text(String(F("OK: Servo parameters updated for ")) + id);
+      String response = String(F("OK: Servo parameters updated for ")) + id;
+      sendWebSocketMessage(client, response);
     } else {
-      client->text(F("ERROR: Unknown servo command"));
+      sendWebSocketMessage(client, F("ERROR: Unknown servo command"));
     }
   } else if (strcmp(action, "moveServo") == 0) {
     // Legacy action for backward compatibility
     int angle = doc["angle"] | -1;
 
     if (angle < 0) {
-      client->text(F("ERROR: Missing or invalid 'angle' for servo move"));
+      sendWebSocketMessage(
+          client, F("ERROR: Missing or invalid 'angle' for servo move"));
       return;
     }
 
@@ -438,11 +451,11 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
       char buffer[100];
       snprintf(buffer, sizeof(buffer), "OK: Servo %s moving to angle %d",
                id.c_str(), angle);
-      client->text(buffer);
+      sendWebSocketMessage(client, buffer);
     } else {
       String errorMsg = String(F("ERROR: Failed to move servo ")) + id +
                         F(" to angle ") + String(angle);
-      client->text(errorMsg);
+      sendWebSocketMessage(client, errorMsg);
     }
 
   } else if (strcmp(action, "detachServo") == 0) {
@@ -454,7 +467,8 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     }
 
     cleanupServo(*servo);
-    client->text(String(F("OK: Servo ")) + id + F(" detached"));
+    String response = String(F("OK: Servo ")) + id + F(" detached");
+    sendWebSocketMessage(client, response);
 
   } else if (strcmp(action, "remove") == 0) {
     auto it = std::remove_if(configuredServos.begin(), configuredServos.end(),
@@ -463,12 +477,14 @@ void handleServoMessage(AsyncWebSocketClient *client, JsonDocument &doc) {
     if (it != configuredServos.end()) {
       cleanupServo(*it);  // Clean up before erasing
       configuredServos.erase(it, configuredServos.end());
-      client->text(String(F("OK: Servo removed: ")) + id);
+      String response = String(F("OK: Servo removed: ")) + id;
+      sendWebSocketMessage(client, response);
     } else {
-      client->text(String(F("ERROR: Servo not found for removal: ")) + id);
+      String response = String(F("ERROR: Servo not found for removal: ")) + id;
+      sendWebSocketMessage(client, response);
     }
 
   } else {
-    client->text(F("ERROR: Unknown servo action"));
+    sendWebSocketMessage(client, F("ERROR: Unknown servo action"));
   }
 }
